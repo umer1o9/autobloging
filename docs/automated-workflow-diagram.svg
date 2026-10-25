@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="1450" viewBox="0 0 1400 1450" role="img" aria-labelledby="title desc">
+  <title id="title">AutoBlog Studio fully automated workflow</title>
+  <desc id="desc">A flowchart from one-time website configuration through scheduled website inspection, topic discovery, Google research, Gemini writing, automatic validation and repair, REST API publication, and monitoring.</desc>
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="4" stdDeviation="7" flood-color="#163f32" flood-opacity="0.12"/></filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#668075"/></marker>
+    <style>
+      .title{font:700 38px Inter,Arial,sans-serif;fill:#173b2e}.subtitle{font:400 18px Inter,Arial,sans-serif;fill:#60766c}.node{fill:#fff;stroke:#cfded6;stroke-width:2;filter:url(#shadow)}.node-green{fill:#eaf5ee;stroke:#8bb29d;stroke-width:2;filter:url(#shadow)}.node-blue{fill:#edf3fb;stroke:#9eb5d3;stroke-width:2;filter:url(#shadow)}.node-warn{fill:#fff5e4;stroke:#d5b678;stroke-width:2;filter:url(#shadow)}.decision{fill:#f4f8f5;stroke:#8faa99;stroke-width:2;filter:url(#shadow)}.label{font:600 18px Inter,Arial,sans-serif;fill:#203c30;text-anchor:middle}.small{font:400 14px Inter,Arial,sans-serif;fill:#5e7469;text-anchor:middle}.edge{fill:none;stroke:#668075;stroke-width:3;marker-end:url(#arrow)}.edge-retry{fill:none;stroke:#b47c32;stroke-width:3;stroke-dasharray:8 7;marker-end:url(#arrow)}.edge-label{font:600 14px Inter,Arial,sans-serif;fill:#526a5f}.retry-label{font:600 14px Inter,Arial,sans-serif;fill:#986723}.step{fill:#176c51}.step-text{font:700 15px Inter,Arial,sans-serif;fill:#fff;text-anchor:middle;dominant-baseline:middle}.lane{font:700 13px Inter,Arial,sans-serif;letter-spacing:2px;fill:#176c51}.footer{font:500 15px Inter,Arial,sans-serif;fill:#51695e;text-anchor:middle}
+    </style>
+  </defs>
+  <rect width="1400" height="1450" fill="#f7faf8"/>
+  <text x="700" y="62" class="title" text-anchor="middle">AutoBlog Studio — Fully Automated Workflow</text>
+  <text x="700" y="94" class="subtitle" text-anchor="middle">Configure each website once. The system researches, writes, checks, schedules, and publishes continuously.</text>
+
+  <text x="78" y="155" class="lane">ONE-TIME SETUP</text>
+  <rect x="250" y="125" width="900" height="88" rx="16" class="node-green"/>
+  <circle cx="295" cy="169" r="20" class="step"/><text x="295" y="170" class="step-text">1</text>
+  <text x="700" y="160" class="label">Add website and automation settings</text>
+  <text x="700" y="187" class="small">URL · audience · brand voice · article volume · budget · publishing schedule · Delivery API</text>
+
+  <path d="M700 213 V253" class="edge"/>
+  <text x="78" y="282" class="lane">AUTOMATIC CYCLE</text>
+  <rect x="425" y="253" width="550" height="76" rx="16" class="node"/>
+  <circle cx="467" cy="291" r="20" class="step"/><text x="467" y="292" class="step-text">2</text>
+  <text x="700" y="286" class="label">Scheduler checks every enabled website</text>
+  <text x="700" y="311" class="small">Each website runs independently</text>
+
+  <path d="M700 329 V369" class="edge"/>
+  <polygon points="700,369 875,438 700,507 525,438" class="decision"/>
+  <text x="700" y="432" class="label">Slot and budget</text><text x="700" y="458" class="small">available?</text>
+  <path d="M525 438 H330 V291 H425" class="edge"/>
+  <text x="348" y="423" class="edge-label">No — wait</text>
+  <path d="M700 507 V547" class="edge"/><text x="718" y="531" class="edge-label">Yes</text>
+
+  <rect x="425" y="547" width="550" height="82" rx="16" class="node-blue"/>
+  <circle cx="467" cy="588" r="20" class="step"/><text x="467" y="589" class="step-text">3</text>
+  <text x="700" y="582" class="label">Inspect the website</text>
+  <text x="700" y="608" class="small">Understand services, audience, existing articles, and approved internal links</text>
+  <path d="M700 629 V669" class="edge"/>
+
+  <rect x="425" y="669" width="550" height="82" rx="16" class="node-blue"/>
+  <circle cx="467" cy="710" r="20" class="step"/><text x="467" y="711" class="step-text">4</text>
+  <text x="700" y="704" class="label">Discover and screen a topic</text>
+  <text x="700" y="730" class="small">Google Search · usefulness · search intent · duplicate prevention</text>
+  <path d="M700 751 V791" class="edge"/>
+
+  <rect x="425" y="791" width="550" height="82" rx="16" class="node-blue"/>
+  <circle cx="467" cy="832" r="20" class="step"/><text x="467" y="833" class="step-text">5</text>
+  <text x="700" y="826" class="label">Research with grounded Google Search</text>
+  <text x="700" y="852" class="small">Collect factual evidence and at least two usable source URLs</text>
+  <path d="M700 873 V913" class="edge"/>
+
+  <rect x="425" y="913" width="550" height="82" rx="16" class="node-green"/>
+  <circle cx="467" cy="954" r="20" class="step"/><text x="467" y="955" class="step-text">6</text>
+  <text x="700" y="948" class="label">Write a structured article with Gemini</text>
+  <text x="700" y="974" class="small">Title · answer · sections · FAQs · table · metadata · references · internal links</text>
+  <path d="M700 995 V1035" class="edge"/>
+
+  <polygon points="700,1035 900,1105 700,1175 500,1105" class="decision"/>
+  <text x="700" y="1087" class="label">Quality, safety, source,</text><text x="700" y="1112" class="label">and structure checks pass?</text>
+  <text x="700" y="1138" class="small">Deterministic validation</text>
+
+  <rect x="1025" y="1064" width="285" height="82" rx="16" class="node-warn"/>
+  <text x="1167" y="1098" class="label">Automatic repair</text>
+  <text x="1167" y="1124" class="small">Fix listed issues, then recheck</text>
+  <path d="M900 1105 H1025" class="edge-retry"/><text x="938" y="1093" class="retry-label">No</text>
+  <path d="M1167 1064 V954 H975" class="edge-retry"/>
+
+  <path d="M700 1175 V1215" class="edge"/><text x="718" y="1199" class="edge-label">Yes</text>
+  <rect x="425" y="1215" width="550" height="82" rx="16" class="node-green"/>
+  <circle cx="467" cy="1256" r="20" class="step"/><text x="467" y="1257" class="step-text">7</text>
+  <text x="700" y="1250" class="label">Schedule and publish through REST API</text>
+  <text x="700" y="1276" class="small">The connected website fetches and displays the published article</text>
+
+  <path d="M700 1297 V1337" class="edge"/>
+  <rect x="425" y="1337" width="550" height="76" rx="16" class="node"/>
+  <circle cx="467" cy="1375" r="20" class="step"/><text x="467" y="1376" class="step-text">8</text>
+  <text x="700" y="1369" class="label">Record activity, usage, cost, sources, and status</text>
+  <text x="700" y="1395" class="small">Temporary failures retry automatically with bounded backoff</text>
+
+  <path d="M425 1375 H210 V291 H425" class="edge"/>
+  <text x="700" y="1438" class="footer">No routine human input · Repeat for every enabled website</text>
+</svg>

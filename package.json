@@ -1,0 +1,23 @@
+{
+  "name": "autoblog-studio",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.14.0"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/server.js",
+    "dev": "node --watch --env-file-if-exists=.env src/server.js",
+    "test": "node --env-file-if-exists=.env --test test/*.test.js",
+    "check": "node --check src/server.js && node --check src/domain.js && node --check src/store.js && node --check src/provider.js && node --check src/image-provider.js && node --check public/app.js && node --check scripts/import-sqlite.js && node --check scripts/local-mysql.js",
+    "db:migrate": "node --env-file-if-exists=.env scripts/migrate.js",
+    "db:import-sqlite": "node --env-file-if-exists=.env scripts/import-sqlite.js",
+    "db:local:setup": "node scripts/local-mysql.js setup",
+    "db:local:start": "node scripts/local-mysql.js start",
+    "db:local:stop": "node scripts/local-mysql.js stop"
+  },
+  "dependencies": {
+    "mysql2": "3.24.6"
+  }
+}
