@@ -2,6 +2,8 @@
 
 AutoBlog Studio needs a persistent Node.js process for its scheduler and persistent storage for generated files in `data/media/`. Use a Hostinger VPS. Hostinger's managed Web/Cloud Node.js product does not support always-running background workers and creates a new build folder for each deployment.
 
+If the application is temporarily deployed through Hostinger's managed Web/Cloud Node.js product, set its **Entry file** to `src/server.js`. The entry remains an ES module, but contains no top-level `await`, so Hostinger's CommonJS LiteSpeed launcher can load it and the application detects that launcher before starting.
+
 The recommended layout is:
 
 ```text
