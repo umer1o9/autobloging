@@ -189,3 +189,5 @@ Delivery pagination, website-key lookup, due-publication selection, and budget s
 - Full keyboard/accessibility/mobile QA and consumer-side SEO templates. Accessibility compliance is not certified.
 
 Public registration is enabled for local development. Set `DISABLE_REGISTRATION=true` after creating local accounts if needed. The server binds only to loopback by default. Do not expose this build publicly without completing the production work above.
+
+For hPanel hosting without PM2, set `WORKER_MODE=cron` and schedule `scripts/worker-once.js`. See [hPanel cron setup](docs/HPANEL_CRON.md).

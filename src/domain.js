@@ -1,5 +1,6 @@
 import { randomUUID, randomBytes, createHash } from 'node:crypto';
 import { normalizeArticle, validateArticle, httpUrl, emptyArticle, renderArticle } from './content.js';
+import { timedOperation } from './timing.js';
 
 export class AppError extends Error { constructor(status, message) { super(message); this.status = status; } }
 export const hash = value => createHash('sha256').update(value).digest('hex');
@@ -322,14 +323,18 @@ export class Domain {
     if (this.running.has(id)) return;
     this.running.add(id);
     let job;
+    const time = (label, operation) => timedOperation(message => console.log(`[worker] ${now()} job=${id} ${message}`), label, operation);
     try {
+      const claimStarted = Date.now();
+      console.log(`[worker] ${now()} job=${id} before claiming job`);
       job = (await this.store.transaction(async () => { const j = (await this.need('job', workspace, id)); if (j.status !== 'queued') return null; const currentSite = await this.need('site', workspace, j.siteId); if (currentSite.generationPaused || (j.automationGenerated && !currentSite.automation?.enabled)) return null; j.status = 'running'; j.attempts = (j.attempts || 0) + 1; (await this.store.put('job', workspace, j.siteId, j)); return j; }, workspace));
+      console.log(`[worker] ${now()} job=${id} after claiming job claimed=${!!job} elapsedMs=${Date.now() - claimStarted}`);
       if (!job) return;
       let topic = (await this.need('topic', workspace, job.topicId)); const site = job.settings.site;
       const checkpoint = async patch => { Object.assign(job, patch); (await this.store.put('job', workspace, job.siteId, job)); };
       if (!job.research) {
         (await checkpoint({ stage: 'research' }));
-        const research = await this.provider.research(topic, site, job.settings.models.research);
+        const research = await time('AI research', () => this.provider.research(topic, site, job.settings.models.research));
         const researchUsage = (research.usages?.length ? research.usages : [research.usage]).filter(Boolean);
         (await checkpoint({ research, usage: [...job.usage, ...researchUsage.map((usage, index) => ({ stage: researchUsage.length > 1 ? `research ${index + 1}` : 'research', ...usage }))] }));
         if (topic.autoDiscover) {
@@ -348,7 +353,7 @@ export class Domain {
       for (const pass of writingPasses) {
         (await checkpoint({ stage: `writing ${pass}` }));
         const writingModel = pass === 1 ? job.settings.models.writing : (job.settings.models.repair || job.settings.models.writing);
-        const result = await this.provider.write(topic, site, job.research, validation?.errors || [], writingModel, content);
+        const result = await time(`AI writing pass=${pass}`, () => this.provider.write(topic, site, job.research, validation?.errors || [], writingModel, content));
         content = normalizeArticle(result.article);
         const sourceUrls = new Set(job.research.sources.map(s => s.url));
         validation = validateArticle(content, site);
@@ -361,9 +366,9 @@ export class Domain {
       requireValue(validation.valid, `Draft failed validation after ${job.settings.maxWritingPasses} writing attempts. Inspect the job validation details; no article was approved.`);
       if (site.imageGeneration?.autoGenerate && site.imageGeneration.provider !== 'none') {
         await checkpoint({ stage: 'images' });
-        if (!content.coverImage?.url) { const cover = await this.createImage(content, site, 'cover', 0); content.coverImage = cover.image; await checkpoint({ candidate: content, usage: [...job.usage, { stage: 'cover image', ...cover.usage }] }); }
+        if (!content.coverImage?.url) { const cover = await time('AI cover image', () => this.createImage(content, site, 'cover', 0)); content.coverImage = cover.image; await checkpoint({ candidate: content, usage: [...job.usage, { stage: 'cover image', ...cover.usage }] }); }
         const count = Math.min(site.imageGeneration.inlineImageCount || 0, content.sections.length);
-        for (const index of this.imageSectionIndexes(content, count)) if (!content.sections[index].image?.url) { const result = await this.createImage(content, site, 'section', index); content.sections[index].image = result.image; await checkpoint({ candidate: content, usage: [...job.usage, { stage: `section image ${index + 1}`, ...result.usage }] }); }
+        for (const index of this.imageSectionIndexes(content, count)) if (!content.sections[index].image?.url) { const result = await time(`AI section image index=${index}`, () => this.createImage(content, site, 'section', index)); content.sections[index].image = result.image; await checkpoint({ candidate: content, usage: [...job.usage, { stage: `section image ${index + 1}`, ...result.usage }] }); }
       }
       (await this.store.transaction(async () => {
         const currentTopic = (await this.need('topic', workspace, topic.id));

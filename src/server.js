@@ -27,7 +27,7 @@ function allowedAdminOrigins(origin) {
   return allowed;
 }
 
-export async function createApp({ database = process.env.DATABASE_URL, origin = process.env.APP_ORIGIN || 'http://127.0.0.1:3210', provider = createProvider(), imageProvider = createImageProvider(), workers = true } = {}) {
+export async function createApp({ database = process.env.DATABASE_URL, origin = process.env.APP_ORIGIN || 'http://127.0.0.1:3210', provider = createProvider(), imageProvider = createImageProvider(), workers = process.env.WORKER_MODE !== 'cron' } = {}) {
   const store = new Store(database);
   try { await store.assertSchema(); } catch (error) { await store.close(); throw error; }
   const domain = new Domain(store, provider, imageProvider), throttle = new Map(), adminOrigins = allowedAdminOrigins(origin);
@@ -49,6 +49,14 @@ export async function createApp({ database = process.env.DATABASE_URL, origin = 
   const cookie = value => `ab_session=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${value ? 604800 : 0}${origin.startsWith('https:') ? '; Secure' : ''}`;
   const server = http.createServer(async (req, res) => {
     const requestId = randomUUID();
+    const isRunRequest = req.method === 'POST' && /^\/api\/sites\/[^/]+\/automation\/run(?:\?|$)/.test(req.url);
+    const runStarted = Date.now();
+    const runLog = message => console.log(`[run] ${new Date().toISOString()} requestId=${requestId} ${message} elapsedMs=${Date.now() - runStarted}`);
+    if (isRunRequest) {
+      runLog('request started');
+      res.once('finish', () => runLog(`response sent status=${res.statusCode}`));
+      res.once('close', () => { if (!res.writableFinished) runLog('connection closed before response finished'); });
+    }
     res.setHeader('x-request-id', requestId);
     res.setHeader('x-content-type-options', 'nosniff');
     res.setHeader('referrer-policy', 'no-referrer');
@@ -119,7 +127,12 @@ export async function createApp({ database = process.env.DATABASE_URL, origin = 
         let match;
         if ((match = path.match(/^\/api\/sites\/([^/]+)$/)) && method === 'PUT') return send(res, 200, { site: await domain.saveSite(workspace, await body(req), match[1]) });
         if ((match = path.match(/^\/api\/sites\/([^/]+)\/automation$/)) && method === 'POST') return send(res, 200, { site: await domain.configureAutomation(workspace, match[1], await body(req)) });
-        if ((match = path.match(/^\/api\/sites\/([^/]+)\/automation\/run$/)) && method === 'POST') return send(res, 202, { site: await domain.runAutomationNow(workspace, match[1]) });
+        if ((match = path.match(/^\/api\/sites\/([^/]+)\/automation\/run$/)) && method === 'POST') {
+          runLog('before queue transaction');
+          const site = await domain.runAutomationNow(workspace, match[1]);
+          runLog('after queue transaction');
+          return send(res, 202, { site });
+        }
         if ((match = path.match(/^\/api\/sites\/([^/]+)\/key$/)) && method === 'POST') return send(res, 200, await domain.rotateKey(workspace, match[1]));
         if ((match = path.match(/^\/api\/sites\/([^/]+)\/topics$/)) && method === 'POST') return send(res, 201, { topic: await domain.createTopic(workspace, match[1], await body(req)) });
         if ((match = path.match(/^\/api\/topics\/([^/]+)\/draft$/)) && method === 'POST') return send(res, 201, { article: await domain.createDraft(workspace, match[1]) });

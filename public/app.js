@@ -25,7 +25,13 @@ const badge = status => `<span class="badge ${e(status)}">${e(status)}</span>`;
 const btn = (action, label, id = '', klass = '') => `<button class="${klass}" data-action="${action}" data-id="${e(id)}">${label}</button>`;
 async function api(path, method = 'GET', payload) {
   const response = await fetch(path, { method, headers: { 'content-type': 'application/json', 'x-autoblog-client': 'admin' }, ...(payload !== undefined ? { body: JSON.stringify(payload) } : {}) });
-  const result = await response.json();
+  let result;
+  try {
+    result = await response.json();
+  } catch {
+    const requestId = response.headers.get('x-request-id');
+    throw new Error(`The server returned an empty or invalid response for ${path} (HTTP ${response.status}). Reload and try again. If it continues, check the server runtime logs.${requestId ? ` Request ID: ${requestId}.` : ''}`);
+  }
   if (!response.ok) throw new Error(result.error || 'Request failed.');
   return result;
 }
