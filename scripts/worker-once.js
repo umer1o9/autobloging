@@ -1,3 +1,5 @@
+console.log(`[worker] started ${new Date().toISOString()}`);
+
 import { Store } from '../src/store.js';
 import { Domain } from '../src/domain.js';
 import { createProvider } from '../src/provider.js';
@@ -5,7 +7,6 @@ import { createImageProvider } from '../src/image-provider.js';
 import { runWorkerOnce } from '../src/worker.js';
 
 const log = message => console.log(`${new Date().toISOString()} ${message}`);
-console.log(`[worker] started ${new Date().toISOString()}`);
 let store;
 try {
   store = new Store();
@@ -18,7 +19,9 @@ try {
 } finally {
   try {
     if (store) await store.close();
-  } finally {
-    console.log(`[worker] finished ${new Date().toISOString()} exitCode=${process.exitCode || 0}`);
+  } catch (error) {
+    log(`Worker cleanup failed (${error.code || 'application error'}).`);
+    process.exitCode = 1;
   }
 }
+console.log(`[worker] finished ${new Date().toISOString()}`);
