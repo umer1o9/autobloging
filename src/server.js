@@ -156,7 +156,10 @@ export async function createApp({ database = process.env.DATABASE_URL, origin = 
       if (method !== 'GET' || !file) throw new AppError(404, 'Not found.');
       res.writeHead(200, { 'content-type': `${file[1]}; charset=utf-8`, 'cache-control': 'no-store' });
       res.end(readFileSync(resolve(publicDir, file[0])));
-    } catch (error) { if (!res.headersSent) send(res, error.status || 500, { error: error.status ? error.message : 'Unexpected server error.', requestId }); else res.end(); }
+    } catch (error) {
+      if (!error.status || error.status >= 500) console.error(JSON.stringify({ event: 'http.request_failed', requestId, method: req.method, path: req.url.split('?')[0], status: error.status || 500, code: error.code || 'APPLICATION_ERROR' }));
+      if (!res.headersSent) send(res, error.status || 500, { error: error.status ? error.message : 'Unexpected server error.', requestId }); else res.end();
+    }
   });
   let timer, activeTick, closing = false;
   const inFlight = new Set();

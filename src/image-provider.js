@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { resolve, join } from 'node:path';
 
 export const IMAGE_MODELS = {
   gemini: [
@@ -24,7 +25,7 @@ export const IMAGE_MODELS = {
   ]
 };
 
-const mediaDir = fileURLToPath(new URL('../data/media/', import.meta.url));
+const defaultMediaDir = fileURLToPath(new URL('../data/media/', import.meta.url));
 const cleanModel = value => String(value || '').trim().slice(0, 150);
 const safeError = (message, details = {}) => Object.assign(new Error(message), { safe: true, ...details });
 const errorDetails = async (response, provider, model) => {
@@ -50,6 +51,7 @@ function decoded(data, mime) {
 }
 
 export function createImageProvider(env = process.env, request = fetch) {
+  const mediaDir = env.MEDIA_DIRECTORY ? resolve(env.MEDIA_DIRECTORY) : defaultMediaDir;
   const configured = {
     gemini: env.ALLOW_PAID_GENERATION === 'true' && !!env.GEMINI_API_KEY,
     openai: env.ALLOW_PAID_GENERATION === 'true' && !!env.OPENAI_API_KEY
@@ -90,9 +92,12 @@ export function createImageProvider(env = process.env, request = fetch) {
       const extension = result.mime === 'image/jpeg' ? 'jpg' : result.mime.split('/')[1];
       await mkdir(mediaDir, { recursive: true });
       const filename = `${randomUUID()}.${extension}`;
-      await writeFile(new URL(`../data/media/${filename}`, import.meta.url), result.buffer, { flag: 'wx' });
+      await writeFile(join(mediaDir, filename), result.buffer, { flag: 'wx' });
       return { url: new URL(`/media/${filename}`, env.APP_ORIGIN || 'http://127.0.0.1:3210').href, usage: result.usage };
     },
-    async read(filename) { return readFile(new URL(`../data/media/${filename}`, import.meta.url)); }
+    async read(filename) {
+      if (!/^[a-f0-9-]+\.(png|jpg|jpeg|webp)$/.test(filename)) throw safeError('Invalid media filename.');
+      return readFile(join(mediaDir, filename));
+    }
   };
 }

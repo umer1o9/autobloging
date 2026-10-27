@@ -20,6 +20,7 @@
     "db:local:stop": "node scripts/local-mysql.js stop"
   },
   "dependencies": {
+    "jsonrepair": "3.15.0",
     "mysql2": "3.24.6"
   }
 }

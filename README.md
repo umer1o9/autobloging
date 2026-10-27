@@ -191,3 +191,7 @@ Delivery pagination, website-key lookup, due-publication selection, and budget s
 Public registration is enabled for local development. Set `DISABLE_REGISTRATION=true` after creating local accounts if needed. The server binds only to loopback by default. Do not expose this build publicly without completing the production work above.
 
 For hPanel hosting without PM2, set `WORKER_MODE=cron` and schedule `scripts/worker-once.js`. See [hPanel cron setup](docs/HPANEL_CRON.md).
+
+The Websites and Calendar pages share a monthly box calendar with article and unfinished-job counts, status colors, and full-article/job links. Website, month, selected date, and expanded days persist in URL parameters and workspace-scoped browser storage. Published articles use their publication date, scheduled articles their schedule date, and drafts/jobs their creation date.
+
+Writer requests include a JSON response schema and only the research memo/source list. Invalid or truncated writer output can consume remaining writing passes (at most three total, with at most one JSON repair call per pass). The pass counter persists across transient job retries. Safety refusals, configuration failures and ambiguous network interruptions stop for inspection. Activity retains failed-call usage when available and safe response diagnostics (model, finish/block reason, output length and JSON status); it does not retain rejected article text. Failed existing jobs are not replayed automatically.

@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS articles (
  approved_revision INT UNSIGNED NULL,
  scheduled_at CHAR(24) CHARACTER SET ascii NULL,
  published_at CHAR(24) CHARACTER SET ascii NULL,
- occupied_slot CHAR(24) CHARACTER SET ascii GENERATED ALWAYS AS (CASE WHEN status='scheduled' THEN scheduled_at ELSE NULL END) STORED,
+ occupied_slot VARCHAR(24) CHARACTER SET ascii COLLATE ascii_bin GENERATED ALWAYS AS (CASE WHEN status='scheduled' THEN RTRIM(scheduled_at) ELSE NULL END) STORED,
  payload JSON NOT NULL,
  created_at CHAR(24) CHARACTER SET ascii NOT NULL,
  UNIQUE KEY article_topic (topic_id),

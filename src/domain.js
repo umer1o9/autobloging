@@ -319,10 +319,13 @@ export class Domain {
     }, workspace));
     return job;
   }
-  async runJob(workspace, id) {
+  async runJob(workspace, id, { deadlineAt = Infinity } = {}) {
     if (this.running.has(id)) return;
     this.running.add(id);
     let job;
+    const ensureTime = duration => {
+      if (Date.now() + duration >= deadlineAt) throw Object.assign(new Error('Worker time budget reached. Progress saved for the next cron run.'), { safe: true, workerYield: true });
+    };
     const time = (label, operation) => timedOperation(message => console.log(`[worker] ${now()} job=${id} ${message}`), label, operation);
     try {
       const claimStarted = Date.now();
@@ -333,6 +336,7 @@ export class Domain {
       let topic = (await this.need('topic', workspace, job.topicId)); const site = job.settings.site;
       const checkpoint = async patch => { Object.assign(job, patch); (await this.store.put('job', workspace, job.siteId, job)); };
       if (!job.research) {
+        ensureTime(6 * 60000);
         (await checkpoint({ stage: 'research' }));
         const research = await time('AI research', () => this.provider.research(topic, site, job.settings.models.research));
         const researchUsage = (research.usages?.length ? research.usages : [research.usage]).filter(Boolean);
@@ -349,26 +353,44 @@ export class Domain {
       }
       requireValue(job.research.sources.length >= 2, 'Research returned fewer than two usable sources. Revise the topic and retry.');
       let content = job.candidate, validation = job.validation;
-      const writingPasses = validation?.valid ? [] : validation && !validation.valid ? [2] : Array.from({ length: job.settings.maxWritingPasses }, (_, index) => index + 1);
+      const maxWritingPasses = Math.max(1, Math.min(3, Number(job.settings.maxWritingPasses) || 3));
+      const previousPass = job.writingPass || (validation ? 1 : 0);
+      const writingPasses = validation?.valid ? [] : Array.from({ length: Math.max(0, maxWritingPasses - previousPass) }, (_, index) => previousPass + index + 1);
       for (const pass of writingPasses) {
-        (await checkpoint({ stage: `writing ${pass}` }));
+        ensureTime(4 * 60000);
+        (await checkpoint({ stage: `writing ${pass}`, writingPass: pass }));
         const writingModel = pass === 1 ? job.settings.models.writing : (job.settings.models.repair || job.settings.models.writing);
-        const result = await time(`AI writing pass=${pass}`, () => this.provider.write(topic, site, job.research, validation?.errors || [], writingModel, content));
+        let result;
+        const recordWritingCalls = async details => {
+          const usages = (details.usages?.length ? details.usages : [details.usage]).filter(Boolean);
+          await checkpoint({ usage: [...job.usage, ...usages.map((usage, index) => ({ ...usage, stage: `writing ${pass} call ${index + 1}` }))],
+            providerDiagnostics: [...(job.providerDiagnostics || []), ...(details.diagnostics || []).map(diagnostic => ({ ...diagnostic, stage: `writing ${pass}` }))] });
+        };
+        try {
+          result = await time(`AI writing pass=${pass}`, () => this.provider.write(topic, site, job.research, validation?.errors || [], writingModel, content));
+        } catch (error) {
+          await recordWritingCalls(error);
+          error.callsRecorded = true;
+          if (!error.formatFailure || pass === maxWritingPasses) throw error;
+          validation = { valid: false, errors: ['The previous response was empty, truncated, or invalid JSON. Return a complete valid article JSON object matching the schema.'] };
+          await checkpoint({ validation, lastWritingError: error.message });
+          continue;
+        }
+        await recordWritingCalls(result);
         content = normalizeArticle(result.article);
         const sourceUrls = new Set(job.research.sources.map(s => s.url));
         validation = validateArticle(content, site);
         if (content.references.some(r => !sourceUrls.has(r.url))) validation.errors.push('Writer references must match captured research sources.');
         validation.valid = validation.errors.length === 0;
-        const writingUsage = (result.usages?.length ? result.usages : [result.usage]).filter(Boolean);
-        (await checkpoint({ candidate: content, validation, usage: [...job.usage, ...writingUsage.map((usage, index) => ({ stage: writingUsage.length > 1 ? `writing ${pass} call ${index + 1}` : `writing ${pass}`, ...usage }))] }));
+        (await checkpoint({ candidate: content, validation }));
         if (validation.valid) break;
       }
-      requireValue(validation.valid, `Draft failed validation after ${job.settings.maxWritingPasses} writing attempts. Inspect the job validation details; no article was approved.`);
+      requireValue(validation?.valid, `Draft failed validation after ${maxWritingPasses} writing attempts. Inspect the job validation details; no article was approved.`);
       if (site.imageGeneration?.autoGenerate && site.imageGeneration.provider !== 'none') {
         await checkpoint({ stage: 'images' });
-        if (!content.coverImage?.url) { const cover = await time('AI cover image', () => this.createImage(content, site, 'cover', 0)); content.coverImage = cover.image; await checkpoint({ candidate: content, usage: [...job.usage, { stage: 'cover image', ...cover.usage }] }); }
+        if (!content.coverImage?.url) { ensureTime(3 * 60000); const cover = await time('AI cover image', () => this.createImage(content, site, 'cover', 0)); content.coverImage = cover.image; await checkpoint({ candidate: content, usage: [...job.usage, { stage: 'cover image', ...cover.usage }] }); }
         const count = Math.min(site.imageGeneration.inlineImageCount || 0, content.sections.length);
-        for (const index of this.imageSectionIndexes(content, count)) if (!content.sections[index].image?.url) { const result = await time(`AI section image index=${index}`, () => this.createImage(content, site, 'section', index)); content.sections[index].image = result.image; await checkpoint({ candidate: content, usage: [...job.usage, { stage: `section image ${index + 1}`, ...result.usage }] }); }
+        for (const index of this.imageSectionIndexes(content, count)) if (!content.sections[index].image?.url) { ensureTime(3 * 60000); const result = await time(`AI section image index=${index}`, () => this.createImage(content, site, 'section', index)); content.sections[index].image = result.image; await checkpoint({ candidate: content, usage: [...job.usage, { stage: `section image ${index + 1}`, ...result.usage }] }); }
       }
       (await this.store.transaction(async () => {
         const currentTopic = (await this.need('topic', workspace, topic.id));
@@ -385,14 +407,19 @@ export class Domain {
         (await this.store.transaction(async () => {
           const currentSite = await this.need('site', workspace, job.siteId);
           const automatic = job.automationGenerated && currentSite.automation?.enabled && currentSite.automation?.mode === 'automatic';
-          const retry = automatic && error.retryable && job.attempts < (job.settings.maxJobAttempts || 3);
+          const retry = error.workerYield || (automatic && error.retryable && job.attempts < (job.settings.maxJobAttempts || 3));
           const safeMessage = error instanceof AppError || error.safe ? error.message : 'Generation failed. Check provider configuration and retry.';
+          if (!error.callsRecorded) {
+            job.usage = [...job.usage, ...(error.usages || []).map((usage, index) => ({ ...usage, stage: `${job.stage} call ${index + 1}` }))];
+            job.providerDiagnostics = [...(job.providerDiagnostics || []), ...(error.diagnostics || []).map(diagnostic => ({ ...diagnostic, stage: job.stage }))];
+          }
           const retryDelay = Math.min(15 * 60000 * Math.max(1, 2 ** (job.attempts - 1)), 3600000);
-          const retryAt = retry ? new Date(Date.now() + retryDelay).toISOString() : null;
+          const retryAt = retry && !error.workerYield ? new Date(Date.now() + retryDelay).toISOString() : null;
           (await this.store.put('job', workspace, job.siteId, { ...job,
             status: retry ? 'queued' : 'failed',
-            stage: retry ? `waiting to retry ${job.stage}` : `${job.stage} failed`,
-            error: safeMessage, providerError: error.providerError || null, retryAt,
+            stage: error.workerYield ? 'waiting for next worker pass' : retry ? `waiting to retry ${job.stage}` : `${job.stage} failed`,
+            attempts: error.workerYield ? Math.max(0, job.attempts - 1) : job.attempts,
+            error: error.workerYield ? null : safeMessage, providerError: error.providerError || null, retryAt,
             ...(retry ? {} : { completedAt: now() }) }));
           const topic = (await this.need('topic', workspace, job.topicId));
           (await this.store.put('topic', workspace, job.siteId, { ...topic, status: retry ? 'generating' : 'failed' }));

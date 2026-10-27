@@ -11,13 +11,14 @@ export async function runWorkerOnce(store, domain, log = console.log) {
   await time('scheduling', () => domain.automate());
   await time('publication', () => domain.publishDue());
   await time('session cleanup', () => store.cleanSessions());
-  // Snapshot at most two jobs; do not keep creating work indefinitely.
-  const queued = await time('queue selection', () => store.queuedJobs(2));
+  // One job and a 25-minute provider-call budget fit hPanel's 30-minute limit.
+  const deadlineAt = Date.now() + 25 * 60000;
+  const queued = await time('queue selection', () => store.queuedJobs(1));
   let processed = 0;
   for (const { workspace, value: job } of queued) {
     if (!store.workerActive) throw new Error('Worker database lock was lost.');
     log(`Starting job ${job.id}.`);
-    await domain.runJob(workspace, job.id);
+    await domain.runJob(workspace, job.id, { deadlineAt });
     const result = await store.get('job', workspace, job.id);
     log(`Job ${job.id}: ${result.status}; stage: ${result.stage}.`);
     processed++;

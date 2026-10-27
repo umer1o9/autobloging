@@ -77,3 +77,78 @@ test('provider preserves safe Google error details for Activity', async () => {
     }
   }, /Google Gemini HTTP 429 RESOURCE_EXHAUSTED/);
 });
+
+test('writing requests enforce the article schema and omit grounding UI payloads', async () => {
+  const provider = createProvider(env, async (_url, options) => {
+    const body = JSON.parse(options.body);
+    assert.equal(body.generationConfig.responseJsonSchema.type, 'object');
+    assert.ok(body.generationConfig.responseJsonSchema.required.includes('sections'));
+    assert.equal(body.generationConfig.responseJsonSchema.properties.sections.items.type, 'object');
+    assert.ok(!options.body.includes('PRIVATE_GROUNDING_WIDGET'));
+    return Response.json({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: JSON.stringify(validArticle()) }] } }] });
+  });
+  await provider.write({}, website(), { memo: 'Evidence', sources: [], searchEntryPoint: { renderedContent: 'PRIVATE_GROUNDING_WIDGET' } }, [], env.GEMINI_WRITER_MODEL);
+});
+
+test('invalid writer and repair outputs retain both usage records and safe diagnostics', async () => {
+  const provider = createProvider(env, async () => Response.json({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'PRIVATE_MALFORMED_OUTPUT' }] } }], usageMetadata: { totalTokenCount: 7 } }));
+  await assert.rejects(provider.write({}, website(), {}, [], env.GEMINI_WRITER_MODEL), error => {
+    assert.equal(error.formatFailure, true);
+    assert.equal(error.usages.length, 2); assert.equal(error.usages[1].tokens.totalTokenCount, 7);
+    assert.equal(error.diagnostics.length, 2); assert.equal(error.diagnostics[0].finishReason, 'STOP');
+    assert.ok(!JSON.stringify(error.diagnostics).includes('PRIVATE_MALFORMED_OUTPUT'));
+    return true;
+  });
+});
+
+test('truncation can use a remaining writing pass while safety blocks cannot', async () => {
+  for (const reason of ['MAX_TOKENS', 'SAFETY']) {
+    let calls = 0;
+    const provider = createProvider(env, async () => { calls++; return Response.json({ candidates: [{ finishReason: reason, content: { parts: [{ text: '{partial' }] } }], usageMetadata: { totalTokenCount: 9 } }); });
+    await assert.rejects(provider.write({}, website(), {}, [], env.GEMINI_WRITER_MODEL), error => {
+      assert.equal(error.formatFailure, reason === 'MAX_TOKENS');
+      assert.equal(error.diagnostics[0].finishReason, reason); assert.equal(error.usages.length, 1);
+      return true;
+    });
+    assert.equal(calls, 1);
+  }
+});
+
+test('a repair HTTP failure preserves the preceding paid writer usage', async () => {
+  let calls = 0;
+  const provider = createProvider(env, async () => ++calls === 1 ? Response.json({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'bad JSON' }] } }], usageMetadata: { totalTokenCount: 11 } }) : Response.json({ error: { status: 'RESOURCE_EXHAUSTED', message: 'Quota unavailable' } }, { status: 429 }));
+  await assert.rejects(provider.write({}, website(), {}, [], env.GEMINI_WRITER_MODEL), error => {
+    assert.equal(error.usages.length, 1); assert.equal(error.usages[0].tokens.totalTokenCount, 11);
+    assert.equal(error.providerError.httpStatus, 429); assert.equal(error.retryable, true);
+    return true;
+  });
+});
+
+test('research retains successful-call usage when a later search fails', async () => {
+  let calls = 0;
+  const provider = createProvider(env, async () => ++calls === 1 ? Response.json({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'Partial evidence memo' }] }, groundingMetadata: { groundingChunks: [] } }], usageMetadata: { totalTokenCount: 19 } }) : Response.json({ error: { status: 'UNAVAILABLE', message: 'Temporary outage' } }, { status: 503 }));
+  await assert.rejects(provider.research({ title: 'Research failure test' }, website(), env.GEMINI_RESEARCH_MODEL), error => {
+    assert.equal(error.usages.length, 1); assert.equal(error.usages[0].tokens.totalTokenCount, 19);
+    assert.equal(error.retryable, true); return true;
+  });
+});
+
+test('network failures stop with a clear safe message rather than blind paid retries', async () => {
+  const provider = createProvider(env, async () => { throw new Error('private connection data'); });
+  await assert.rejects(provider.write({}, website(), {}, [], env.GEMINI_WRITER_MODEL), error => {
+    assert.equal(error.code, 'PROVIDER_NETWORK_ERROR'); assert.ok(!error.retryable);
+    assert.ok(!error.message.includes('private connection data')); return true;
+  });
+});
+
+test('common JSON syntax errors are repaired locally without an extra AI call', async () => {
+  let calls = 0;
+  const malformed = JSON.stringify(validArticle()).replace('"title":', 'title:').replace(/}$/, ',}');
+  const provider = createProvider(env, async () => {
+    calls++;
+    return Response.json({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: malformed }] } }], usageMetadata: { totalTokenCount: 100 } });
+  });
+  const result = await provider.write({}, website(), {}, [], env.GEMINI_WRITER_MODEL);
+  assert.equal(calls, 1); assert.equal(result.article.title, validArticle().title);
+  assert.equal(result.diagnostics[0].jsonStatus, 'locally_repaired');
+});

@@ -1,5 +1,5 @@
 const app = document.querySelector('#app'), modal = document.querySelector('#modal');
-const pagePaths = { automation: '/automation', overview: '/overview', sites: '/websites', topics: '/topics', review: '/articles', calendar: '/calendar', jobs: '/activity', api: '/delivery-api' };
+const pagePaths = { automation: '/automation', overview: '/overview', websites: '/websites', topics: '/topics', review: '/articles', calendar: '/calendar', activity: '/activity', api: '/delivery-api' };
 function routeFromPath(path = typeof location === 'undefined' ? '/' : location.pathname) {
   const article = path.match(/^\/articles\/([^/]+)$/);
   if (article) return { page: 'article', articleId: decodeURIComponent(article[1]) };
@@ -8,6 +8,50 @@ function routeFromPath(path = typeof location === 'undefined' ? '/' : location.p
 }
 const initialRoute = routeFromPath();
 let data, page = initialRoute.page, selectedSite = '', register = true, toastTimer, refreshTimer, editingArticle, viewingArticle, articleReturnPage = 'review';
+let calendarMonth = '', calendarDate = '', expandedDays = new Set(), filterWorkspace;
+const browserTimezone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+const calendarTimezone = () => data?.sites.find(site => site.id === selectedSite)?.timezone || browserTimezone();
+function dateKey(value, timeZone = calendarTimezone()) {
+  if (!value || Number.isNaN(new Date(value).getTime())) return '';
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(value));
+  return ['year', 'month', 'day'].map(type => parts.find(part => part.type === type).value).join('-');
+}
+function validDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '') || Number(value.slice(0, 4)) < 1000) return false;
+  const date = new Date(`${value}T12:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+function validMonth(value) { return validDate(`${value}-01`); }
+function filterKey() { return `autoblog:calendar:v1:${data.user.workspace || data.user.id || data.user.email || 'local'}`; }
+function readViewState(fromUrl = true) {
+  let saved = {};
+  try { const value = JSON.parse(localStorage.getItem(filterKey()) || '{}'); if (value && typeof value === 'object' && !Array.isArray(value)) saved = value; } catch { /* Storage may be unavailable. */ }
+  const params = typeof URLSearchParams !== 'undefined' ? new URLSearchParams(typeof location === 'undefined' ? '' : location.search) : null;
+  const get = (key, fallback) => fromUrl && params?.has(key) ? params.get(key) : fallback;
+  selectedSite = get('site', saved.site || '');
+  if (!data.sites.some(site => site.id === selectedSite)) selectedSite = '';
+  const month = get('month', saved.month), day = get('date', saved.date);
+  calendarDate = validDate(day) ? day : '';
+  calendarMonth = fromUrl && params?.has('date') && !params.has('month') && calendarDate ? calendarDate.slice(0, 7) : validMonth(month) ? month : calendarDate ? calendarDate.slice(0, 7) : dateKey(new Date()).slice(0, 7);
+  if (calendarDate && !calendarDate.startsWith(calendarMonth)) calendarDate = '';
+  const expanded = get('expanded', Array.isArray(saved.expanded) ? saved.expanded.join(',') : '');
+  expandedDays = new Set(String(expanded || '').split(',').filter(validDate));
+  const returnPage = get('return', saved.returnPage);
+  articleReturnPage = Object.hasOwn(pagePaths, returnPage) ? returnPage : 'review';
+  filterWorkspace = filterKey();
+}
+function saveViewState() {
+  if (!data) return;
+  try { localStorage.setItem(filterKey(), JSON.stringify({ site: selectedSite, month: calendarMonth, date: calendarDate, expanded: [...expandedDays], returnPage: articleReturnPage })); } catch { /* URL still preserves state. */ }
+}
+function syncViewUrl(replace = true) {
+  saveViewState();
+  if (typeof history !== 'undefined') history[replace ? 'replaceState' : 'pushState']({}, '', routeUrl(page, viewingArticle?.id));
+}
+function selectWebsite(value) {
+  selectedSite = data.sites.some(site => site.id === value) ? value : '';
+  syncViewUrl(false); render();
+}
 const e = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const usd = cents => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format((cents || 0) / 100);
 const siteName = id => data.sites.find(s => s.id === id)?.name || 'Website';
@@ -36,16 +80,28 @@ async function api(path, method = 'GET', payload) {
   return result;
 }
 function toast(message) { clearTimeout(toastTimer); const node = document.querySelector('#toast'); node.textContent = message; node.classList.add('visible'); toastTimer = setTimeout(() => node.classList.remove('visible'), 5000); }
-function routeUrl(nextPage, articleId) { return nextPage === 'article' ? `/articles/${encodeURIComponent(articleId)}` : pagePaths[nextPage] || pagePaths.automation; }
+function routeUrl(nextPage, articleId) {
+  const path = nextPage === 'article' ? `/articles/${encodeURIComponent(articleId)}` : pagePaths[nextPage] || pagePaths.automation;
+  if (typeof URLSearchParams === 'undefined') return path;
+  const params = new URLSearchParams();
+  params.set('site', selectedSite);
+  if (calendarMonth) params.set('month', calendarMonth);
+  if (calendarDate) params.set('date', calendarDate);
+  if (expandedDays.size) params.set('expanded', [...expandedDays].join(','));
+  if (nextPage === 'article') params.set('return', articleReturnPage);
+  return `${path}?${params}`;
+}
 function navigatePage(nextPage, articleId, replace = false) {
   page = nextPage; viewingArticle = nextPage === 'article' ? viewingArticle : null;
+  saveViewState();
   if (typeof history !== 'undefined') history[replace ? 'replaceState' : 'pushState']({}, '', routeUrl(nextPage, articleId));
   render();
 }
 async function restoreRoute(replace = false) {
   const route = routeFromPath(); page = route.page; viewingArticle = null;
+  readViewState();
   if (route.articleId) ({ article: viewingArticle } = await api(`/api/articles/${route.articleId}`));
-  if (replace && typeof history !== 'undefined') history.replaceState({}, '', routeUrl(page, route.articleId));
+  syncViewUrl(true);
   render();
 }
 function openDialog(title, body, wide = false) { modal.className = wide ? 'dialog-wide' : ''; modal.innerHTML = `<div class="dialog-head"><h2>${e(title)}</h2>${btn('close', '✕')}</div><div class="dialog-body">${body}<div id="dialog-error" class="error hidden" role="alert"></div></div>`; if (!modal.open) modal.showModal(); }
@@ -56,7 +112,7 @@ function authScreen() {
   clearInterval(refreshTimer);
   app.innerHTML = `<div class="auth"><section class="auth-story"><div class="brand"><div class="logo">a</div><div>autoblog <span>studio</span></div></div><h1>Good content.<br>Every website.<br>One workspace.</h1><p>Move from a promising idea to a reviewed article, then deliver it to any website through one simple API.</p><div class="auth-flow"><div>01 &nbsp; Plan content for each website</div><div>02 &nbsp; Research, write, and review</div><div>03 &nbsp; Publish on your schedule</div></div><footer>Set your themes. Choose your review policy. Automate publishing.</footer></section><section class="auth-form"><div class="auth-form-inner"><div class="eyebrow">Your content operations, together</div><h2>${register ? 'Create your workspace' : 'Welcome back'}</h2><p class="subtext">${register ? 'Start with your first website. Add more whenever you’re ready.' : 'Sign in to continue your publishing workflow.'}</p><form id="auth-form">${register ? field('Workspace name', 'name', '', 'text', 'required placeholder="e.g. Acme content team" maxlength="100"') : ''}${field('Email address', 'email', '', 'email', 'required autocomplete="email" placeholder="you@company.com"')}${field('Password', 'password', '', 'password', `required minlength="12" maxlength="256" autocomplete="${register ? 'new-password' : 'current-password'}"`)}<span class="help">At least 12 characters.</span><div id="auth-error" class="error hidden" role="alert"></div><button class="primary" type="submit">${register ? 'Create workspace →' : 'Sign in →'}</button></form><div class="auth-toggle">${register ? 'Already have a workspace?' : 'New to AutoBlog?'} ${btn('toggle-auth', register ? 'Sign in' : 'Create workspace', '', 'ghost')}</div><p class="footer-note">Local development preview · Your data stays in this installation.</p></div></section></div>`;
 }
-async function refresh() { data = await api('/api/dashboard'); if (selectedSite && !data.sites.some(s => s.id === selectedSite)) selectedSite = ''; render(); }
+async function refresh() { data = await api('/api/dashboard'); if (filterWorkspace !== filterKey()) readViewState(); if (selectedSite && !data.sites.some(s => s.id === selectedSite)) { selectedSite = ''; syncViewUrl(); } render(); }
 function startPolling() { clearInterval(refreshTimer); refreshTimer = setInterval(async () => { if (modal.open) return; try { await refresh(); } catch { /* Keep current view during temporary connection failures. */ } }, 10000); }
 function heading(title, description, actions = '') { return `<div class="page-heading"><div><div class="eyebrow">Content operations</div><h1>${title}</h1><p class="subtext">${description}</p></div><div class="actions">${actions}</div></div>`; }
 function empty(icon, title, description, action = '') { return `<div class="empty"><div class="empty-icon">${icon}</div><h3>${title}</h3><p>${description}</p>${action}</div>`; }
@@ -123,17 +179,47 @@ function automationDialog(id) {
   const site = data.sites.find(s => s.id === id), config = site.automation || {};
   openDialog('Automate ' + site.name, `<form id="automation-form" data-id="${e(id)}">${area('Optional topic guidance', 'themes', (config.themes || []).join('\n'), 'Leave blank for complete website-driven topic discovery. Add one hint per line only when you want to steer the subjects.')}<label for="automation-mode">Publishing mode</label><select name="mode" id="automation-mode"><option value="automatic" ${config.mode !== 'review' ? 'selected' : ''}>Fully automatic — no human input</option><option value="review" ${config.mode === 'review' ? 'selected' : ''}>Require one approval before publishing</option></select><p class="help">Fully automatic mode inspects the website, discovers and researches a topic, validates the generated article, and publishes without human factual review. A failed research or validation step stops that article instead of publishing it.</p><p>${site.monthlyVolume} articles per month, spaced about ${Math.round(30 * 24 / site.monthlyVolume * 10) / 10} hours apart. First job starts immediately. Monthly reservation limit: ${usd(site.monthlyBudgetCents)}.</p><div class="dialog-foot">${btn('close', 'Cancel')}<button type="submit" class="primary">Save & start hands-off flow</button></div></form>`);
 }
+function websiteActions(site) {
+  return `<div class="actions">${site.automation?.enabled ? btn('automation-run', 'Generate article now', site.id, 'primary') : btn('automation-settings', 'Set up automation', site.id, 'primary')}${btn('site', 'Website settings', site.id)}${btn('key', site.hasApiKey ? 'Rotate API key' : 'Create API key', site.id)}</div>`;
+}
 function websites() {
-  return heading('Websites', 'One workspace. A separate editorial setup for every website.', btn('site', '+ Add website', '', 'primary')) + (!data.sites.length ? `<section class="panel">${empty('⌘', 'Connect your first website', 'No CMS plugin needed. Add its URL, then use the delivery API.', btn('site', 'Add a website', '', 'primary'))}</section>` : `<div class="site-grid">${data.sites.map(s => `<section class="panel site-card"><div class="eyebrow">REST API delivery</div><h3>${e(s.name)}</h3><div class="site-url">${e(s.url)}</div><div class="site-meta"><div><strong>${s.monthlyVolume}</strong><span>articles / month</span></div><div><strong>${usd(s.monthlyBudgetCents)}</strong><span>monthly budget</span></div><div><strong>${s.reviewCapacity}</strong><span>review queue limit</span></div></div><p class="subtext">${e(s.timezone)} · ${s.publicationPaused ? 'Publication paused' : 'Scheduled publication enabled'}</p><div class="actions"><br></div><div class="actions">${s.automation?.enabled ? btn('automation-run', 'Generate article now', s.id, 'primary') : btn('automation-settings', 'Set up automation', s.id, 'primary')}${btn('site', 'Website settings', s.id)}${btn('key', s.hasApiKey ? 'Rotate API key' : 'Create API key', s.id)}</div><p class="help">${s.automation?.enabled ? 'Starts one article immediately using this website’s automatic workflow and safeguards.' : 'Enable automation once, then generate an article here whenever you need one.'}</p></section>`).join('')}</div>`);
+  const site = data.sites.find(item => item.id === selectedSite);
+  const summary = site ? `<div class="website-summary"><div><h2>${e(site.name)}</h2><p class="subtext">${e(site.url)}</p><p class="help">${site.monthlyVolume} articles / month · ${usd(site.monthlyBudgetCents)} monthly budget · ${site.reviewCapacity} review limit · ${e(site.timezone)} · ${site.publicationPaused ? 'Publication paused' : 'Publication enabled'}</p></div><div>${websiteActions(site)}<p class="help">${site.automation?.enabled ? 'Starts one article immediately using this website’s automatic workflow and safeguards.' : 'Enable automation once to generate articles.'}</p></div></div>` : `<div class="website-summary"><div><h2>All connected websites</h2><p class="subtext">${data.sites.length} websites · ${data.articles.length} articles</p></div><div><label for="website-summary-select">Manage a website</label><select id="website-summary-select"><option value="">Choose a website…</option>${data.sites.map(item => `<option value="${e(item.id)}">${e(item.name)}</option>`).join('')}</select></div></div>`;
+  return heading('Websites', 'Your connected websites and article calendar.', btn('site', '+ Add website', '', 'primary')) + (!data.sites.length ? `<section class="panel">${empty('⌘', 'Connect your first website', 'Add its URL to start planning articles.', btn('site', 'Add a website', '', 'primary'))}</section>` : `<section class="panel">${summary}</section>${monthCalendar()}`);
 }
 function topicsPage() {
   const topics = filtered(data.topics);
   return heading('Topic queue', 'Turn audience questions into an organized editorial plan.', btn('topic', '+ Add topic', '', 'primary')) + `<section class="panel">${topics.length ? `<div class="table-wrap"><table><thead><tr><th>Topic / brief</th><th>Website</th><th>Priority</th><th>Status</th><th>Next step</th></tr></thead><tbody>${topics.map(t => `<tr><td class="row-title">${e(t.title)}<small>${e(t.group)}${t.brief ? ` · ${e(t.brief.slice(0, 85))}` : ''}</small></td><td>${e(siteName(t.siteId))}</td><td>${['', 'High', 'Normal', 'Low'][t.priority]}</td><td>${badge(t.status)}</td><td><div class="actions">${t.articleId ? btn('edit-article', 'Review draft', t.articleId) : t.status === 'generating' ? '<span class="muted">Processing…</span>' : btn('manual', 'Write manually', t.id) + btn('generate', t.status === 'failed' ? 'Retry AI' : 'Generate with AI', t.id, 'primary')}</div></td></tr>`).join('')}</tbody></table></div>` : empty('≡', 'Make room for your next idea', 'Add a question, a short brief, and the website it belongs to.', btn('topic', 'Create first topic', '', 'primary'))}</section>`;
 }
-function calendar() {
-  const articles = filtered(data.articles).filter(a => ['scheduled', 'published', 'approved'].includes(a.status)).sort((a, b) => (a.scheduledAt || 'z').localeCompare(b.scheduledAt || 'z'));
-  return heading('Publishing calendar', 'Approved articles go live in your API when their scheduled time arrives.') + `<section class="panel"><div class="panel-head"><h2>Publication schedule</h2><span class="badge">Checks every 5 seconds while server runs</span></div>${articles.length ? articles.map(a => { const site = data.sites.find(s => s.id === a.siteId); const date = a.scheduledAt ? new Date(a.scheduledAt) : null; return `<div class="calendar-item"><div class="date-tile">${date ? e(date.toLocaleString('en', { month: 'short', timeZone: site.timezone })) : 'NO'}<strong>${date ? e(date.toLocaleString('en', { day: 'numeric', timeZone: site.timezone })) : '—'}</strong></div><div class="row-title">${e(a.title)}<small>${e(site.name)} · ${date ? e(date.toLocaleString('en', { timeZone: site.timezone })) + ' ' + e(site.timezone) : 'Ready to schedule'}</small></div><div class="actions">${badge(a.status)}${btn('view-article', 'View full page', a.id, 'primary')}${btn('edit-article', 'Details', a.id)}</div></div>`; }).join('') : empty('▦', 'A little planning goes a long way', 'Approve a draft, then choose its publication date and time.')}</section>`;
+function calendarEntries() {
+  const articles = filtered(data.articles), articleTopics = new Set(data.articles.map(article => article.topicId));
+  const entries = articles.map(article => ({ ...article, kind: 'article', day: dateKey(article.status === 'published' ? article.publishedAt : article.status === 'scheduled' ? article.scheduledAt : null) || dateKey(article.createdAt) }));
+  for (const job of filtered(data.jobs)) {
+    if (!['queued', 'running', 'failed'].includes(job.status) || job.articleId || articleTopics.has(job.topicId) || data.topics.some(topic => topic.id === job.topicId && topic.articleId)) continue;
+    entries.push({ ...job, kind: 'job', title: data.topics.find(topic => topic.id === job.topicId)?.title || 'Article generation', day: dateKey(job.createdAt) });
+  }
+  return entries.filter(entry => entry.day).sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')) || a.id.localeCompare(b.id));
 }
+function monthCells(month) {
+  const first = new Date(`${month}-01T12:00:00Z`), start = new Date(first);
+  start.setUTCDate(first.getUTCDate() - (first.getUTCDay() + 6) % 7);
+  const last = new Date(first); last.setUTCMonth(last.getUTCMonth() + 1); last.setUTCDate(0);
+  const weeks = Math.ceil(((first.getUTCDay() + 6) % 7 + last.getUTCDate()) / 7);
+  return Array.from({ length: weeks * 7 }, (_, index) => { const day = new Date(start); day.setUTCDate(start.getUTCDate() + index); return day.toISOString().slice(0, 10); });
+}
+function monthCalendar() {
+  if (!validMonth(calendarMonth)) calendarMonth = dateKey(new Date()).slice(0, 7);
+  const entries = calendarEntries(), grouped = new Map();
+  for (const entry of entries) { if (!grouped.has(entry.day)) grouped.set(entry.day, []); grouped.get(entry.day).push(entry); }
+  const today = dateKey(new Date()), monthLabel = new Date(`${calendarMonth}-01T12:00:00Z`).toLocaleDateString('en-US', { timeZone: 'UTC', month: 'long', year: 'numeric' });
+  const visible = entries.filter(entry => entry.day.startsWith(calendarMonth));
+  const statusLabels = ['published', 'scheduled', 'draft', 'review', 'approved', 'queued', 'running', 'failed', 'rejected'];
+  return `<section class="panel month-calendar"><div class="calendar-toolbar"><div><h2>${e(monthLabel)}</h2><p class="help">${visible.filter(entry => entry.kind === 'article').length} articles · ${visible.filter(entry => entry.kind === 'job').length} pending / failed jobs · ${e(calendarTimezone())}</p></div><div class="calendar-controls">${btn('calendar-prev', '← Previous month')}${btn('calendar-today', 'Today')}${btn('calendar-next', 'Next month →')}<div><label for="calendar-date">Go to date</label><input type="date" id="calendar-date" min="1000-01-01" max="9999-12-31" value="${e(calendarDate || calendarMonth + '-01')}"></div></div></div><div class="calendar-legend" aria-label="Status legend">${statusLabels.map(status => `<span class="calendar-status status-${status}">${status}</span>`).join('')}</div><div class="calendar-scroll" tabindex="0" aria-label="Monthly article calendar; scroll horizontally on small screens"><div class="month-grid">${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(day => `<div class="weekday">${day}</div>`).join('')}${monthCells(calendarMonth).map(day => {
+    const records = grouped.get(day) || [], expanded = expandedDays.has(day), shown = expanded ? records : records.slice(0, 4), articleCount = records.filter(entry => entry.kind === 'article').length;
+    return `<section class="calendar-day ${day.startsWith(calendarMonth) ? '' : 'outside-month'} ${day === calendarDate ? 'selected-day' : ''} ${day === today ? 'today' : ''}" aria-label="${day}"><div class="calendar-day-head"><time datetime="${day}">${Number(day.slice(-2))}</time>${day === today ? '<span>Today</span>' : ''}</div>${records.length ? `<p class="day-count">${articleCount} article${articleCount === 1 ? '' : 's'} · ${records.length - articleCount} job${records.length - articleCount === 1 ? '' : 's'}</p>` : '<p class="day-count">No articles</p>'}<div class="day-entries">${shown.map(entry => `<button class="calendar-entry status-${e(entry.status)}" data-action="${entry.kind === 'article' ? 'view-article' : 'job'}" data-id="${e(entry.id)}" title="${e(entry.title)}" aria-label="${entry.kind === 'article' ? 'View article' : 'View job details'}: ${e(entry.title)}; ${e(entry.status)}; ${e(siteName(entry.siteId))}"><span class="calendar-entry-title">${e(entry.title)}</span><span class="calendar-entry-meta">${e(entry.status)}${entry.kind === 'job' ? ' · ' + e(entry.stage) : ''}</span>${!selectedSite ? `<span class="calendar-entry-site">${e(siteName(entry.siteId))}</span>` : ''}<span class="calendar-entry-action">${entry.kind === 'article' ? 'View article →' : 'View job details →'}</span></button>`).join('')}</div>${records.length > 4 ? `<button class="day-more" data-action="calendar-expand" data-id="${day}" aria-expanded="${expanded}">${expanded ? 'Show less' : `Show ${records.length - 4} more`}</button>` : ''}</section>`;
+  }).join('')}</div></div>${!visible.length ? '<p class="calendar-empty">No articles or generation jobs this month. Choose another month or website.</p>' : ''}</section>`;
+}
+function calendar() { return heading('Publishing calendar', 'Browse articles and generation progress by date.') + monthCalendar(); }
 function jobsPage() {
   const jobs = filtered(data.jobs);
   return heading('Generation activity', 'Follow research, writing, validation, and failures for each job.') + `<div class="notice warning"><div><strong>Reservations are not actual charges</strong>Job allowances stay reserved for the month, including failed attempts. Billing reconciliation and provider-enforced spend caps are not implemented in this local milestone.</div></div><section class="panel">${jobs.length ? `<div class="table-wrap"><table><thead><tr><th>Topic</th><th>Stage</th><th>Status</th><th>Date &amp; time</th><th>Last message</th><th>Reserved</th><th></th></tr></thead><tbody>${jobs.map(j => `<tr><td class="row-title">${e(data.topics.find(t => t.id === j.topicId)?.title)}<small>${e(siteName(j.siteId))}</small></td><td>${e(j.stage)}</td><td>${badge(j.status)}</td><td>${activityTime(j)}</td><td>${e(j.error || (j.retryAt ? `Next retry: ${new Date(j.retryAt).toLocaleString()}` : 'No error'))}</td><td>${usd(j.reservedCents)}</td><td>${btn('job', 'Details', j.id)}</td></tr>`).join('')}</tbody></table></div>` : empty('↻', 'No generation jobs yet', 'AI jobs appear here after you configure a provider and generate a topic.')}</section>`;
@@ -145,9 +231,10 @@ function integration() {
 }
 async function openFullArticle(id, pushRoute = true) {
   const { article } = await api(`/api/articles/${id}`);
-  articleReturnPage = page === 'article' ? 'review' : page;
+  articleReturnPage = page === 'article' ? articleReturnPage : page;
   viewingArticle = article;
   page = 'article';
+  saveViewState();
   if (pushRoute && typeof history !== 'undefined') history.pushState({}, '', routeUrl('article', id));
   render();
 }
@@ -232,12 +319,29 @@ function readArticleFields() {
     internalLinks: [...document.querySelectorAll('input[name=internal-link]:checked')].map(node => { const { title, url } = site.approvedLinks[Number(node.value)]; return { title, url }; }) };
 }
 document.addEventListener('input', event => { if (event.target.closest('#article-fields')) editingArticle.dirty = true; });
-document.addEventListener('change', event => { if (event.target.id === 'site-filter') { selectedSite = event.target.value; render(); } });
+document.addEventListener('change', event => {
+  if (['site-filter', 'website-summary-select'].includes(event.target.id)) selectWebsite(event.target.value);
+  if (event.target.id === 'calendar-date' && validDate(event.target.value)) {
+    calendarDate = event.target.value; calendarMonth = calendarDate.slice(0, 7); syncViewUrl(false); render();
+  }
+});
 document.addEventListener('click', async event => {
   const button = event.target.closest('[data-action]'); if (!button) return;
   event.preventDefault(); const action = button.dataset.action, id = button.dataset.id;
   button.disabled = true;
   try {
+    if (action === 'calendar-expand') {
+      if (expandedDays.has(id)) expandedDays.delete(id); else expandedDays.add(id);
+      syncViewUrl(false); render(); document.querySelector(`[data-action="calendar-expand"][data-id="${id}"]`)?.focus?.(); return;
+    }
+    if (['calendar-prev', 'calendar-next', 'calendar-today'].includes(action)) {
+      if (action === 'calendar-today') { calendarDate = dateKey(new Date()); calendarMonth = calendarDate.slice(0, 7); }
+      else {
+        const date = new Date(`${calendarMonth}-01T12:00:00Z`); date.setUTCMonth(date.getUTCMonth() + (action === 'calendar-prev' ? -1 : 1));
+        const month = date.toISOString().slice(0, 7); if (validMonth(month)) { calendarMonth = month; calendarDate = ''; }
+      }
+      syncViewUrl(false); render(); document.querySelector(`[data-action="${action}"]`)?.focus?.(); return;
+    }
     if (action.startsWith('nav-')) { navigatePage(action.slice(4)); return; }
     if (action === 'view-article') { if (modal.open) modal.close(); await openFullArticle(id); return; }
     if (action === 'back-article') { navigatePage(articleReturnPage || 'review'); return; }

@@ -117,3 +117,78 @@ test('no-source research blocks writing and preserves failure', async t => {
   const job = (await domain.startGeneration('workspace-a', topic.id)); await domain.runJob('workspace-a', job.id);
   assert.equal(wrote, false); assert.equal((await store.get('job', 'workspace-a', job.id)).status, 'failed'); assert.equal((await store.list('article', 'workspace-a', site.id)).length, 0);
 });
+
+test('malformed JSON uses the next writing pass and preserves failed-call usage', async t => {
+  let calls = 0;
+  const provider = { ready: true, models: { writing: 'economy', repair: 'repair' },
+    research: async () => ({ sources: validArticle().references, usage: {} }),
+    write: async (_topic, _site, _research, errors, model) => {
+      calls++;
+      if (calls === 1) throw Object.assign(new Error('Invalid article JSON'), { safe: true, formatFailure: true, usages: [{ model, tokens: { totalTokenCount: 10 } }], diagnostics: [{ finishReason: 'MAX_TOKENS' }] });
+      assert.equal(model, 'repair'); assert.ok(errors.length);
+      return { article: validArticle(), usages: [{ model, tokens: { totalTokenCount: 20 } }], diagnostics: [{ finishReason: 'STOP' }] };
+    }
+  };
+  const { domain, store, site } = await setup(t, provider);
+  const topic = await domain.createTopic('workspace-a', site.id, { title: 'Reliable JSON recovery' });
+  const job = await domain.startGeneration('workspace-a', topic.id); await domain.runJob('workspace-a', job.id);
+  const saved = await store.get('job', 'workspace-a', job.id);
+  assert.equal(saved.status, 'completed'); assert.equal(calls, 2);
+  assert.equal(saved.writingPass, 2); assert.equal(saved.providerDiagnostics.length, 2);
+  assert.equal(saved.usage.filter(usage => usage.stage.startsWith('writing')).length, 2);
+  assert.equal((await store.list('article', 'workspace-a', site.id)).length, 1);
+});
+
+test('repeated JSON failures stop at the writing limit without inserting an article', async t => {
+  let calls = 0;
+  const provider = { ready: true, models: {}, research: async () => ({ sources: validArticle().references, usage: {} }), write: async () => {
+    calls++; throw Object.assign(new Error('Invalid article JSON'), { safe: true, formatFailure: true, usages: [{ tokens: { totalTokenCount: 3 } }, { tokens: { totalTokenCount: 4 } }], diagnostics: [{ finishReason: 'STOP' }] });
+  } };
+  const { domain, store, site } = await setup(t, provider);
+  const topic = await domain.createTopic('workspace-a', site.id, { title: 'Bounded JSON recovery' });
+  const job = await domain.startGeneration('workspace-a', topic.id); await domain.runJob('workspace-a', job.id);
+  const saved = await store.get('job', 'workspace-a', job.id);
+  assert.equal(saved.status, 'failed'); assert.equal(calls, 3); assert.equal(saved.retryAt, null);
+  assert.equal(saved.usage.filter(usage => usage.stage.startsWith('writing')).length, 6);
+  assert.equal((await store.list('article', 'workspace-a', site.id)).length, 0);
+});
+
+test('provider refusals fail immediately while preserving usage and diagnostic reason', async t => {
+  let calls = 0;
+  const provider = { ready: true, models: {}, research: async () => ({ sources: validArticle().references, usage: {} }), write: async () => {
+    calls++; throw Object.assign(new Error('Provider refused content'), { safe: true, formatFailure: false, usages: [{ tokens: { totalTokenCount: 3 } }], diagnostics: [{ finishReason: 'SAFETY' }] });
+  } };
+  const { domain, store, site } = await setup(t, provider);
+  const topic = await domain.createTopic('workspace-a', site.id, { title: 'Provider refusal handling' });
+  const job = await domain.startGeneration('workspace-a', topic.id); await domain.runJob('workspace-a', job.id);
+  const saved = await store.get('job', 'workspace-a', job.id);
+  assert.equal(saved.status, 'failed'); assert.equal(calls, 1);
+  assert.equal(saved.providerDiagnostics[0].finishReason, 'SAFETY'); assert.equal(saved.usage.length, 2);
+});
+
+test('resuming a job does not reset its consumed writing pass allowance', async t => {
+  let calls = 0;
+  const provider = { ready: true, models: {}, write: async () => {
+    calls++; throw Object.assign(new Error('Invalid article JSON'), { safe: true, formatFailure: true, usages: [] });
+  } };
+  const { domain, store, site } = await setup(t, provider);
+  const topic = await domain.createTopic('workspace-a', site.id, { title: 'Persisted writing allowance' });
+  const job = await domain.startGeneration('workspace-a', topic.id);
+  await store.put('job', 'workspace-a', site.id, { ...job, writingPass: 2, research: { sources: validArticle().references }, validation: { valid: false, errors: ['Needs repair'] } });
+  await domain.runJob('workspace-a', job.id);
+  assert.equal(calls, 1); assert.equal((await store.get('job','workspace-a',job.id)).writingPass, 3);
+});
+
+test('cron time-budget yield preserves the queue and resumes without consuming an error attempt', async t => {
+  let researchCalls = 0;
+  const provider = { ready: true, models: {}, research: async () => { researchCalls++; return { sources: validArticle().references, usage: {} }; }, write: async () => ({ article: validArticle(), usage: {} }) };
+  const { domain, store, site } = await setup(t, provider);
+  const topic = await domain.createTopic('workspace-a', site.id, { title: 'Cron deadline resumption' });
+  const job = await domain.startGeneration('workspace-a', topic.id);
+  await domain.runJob('workspace-a', job.id, { deadlineAt: Date.now() + 1000 });
+  const yielded = await store.get('job', 'workspace-a', job.id);
+  assert.equal(yielded.status, 'queued'); assert.equal(yielded.stage, 'waiting for next worker pass');
+  assert.equal(yielded.attempts, 0); assert.equal(researchCalls, 0); assert.equal(yielded.error, null);
+  await domain.runJob('workspace-a', job.id);
+  assert.equal((await store.get('job','workspace-a',job.id)).status, 'completed'); assert.equal(researchCalls, 1);
+});

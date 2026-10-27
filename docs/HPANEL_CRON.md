@@ -3,7 +3,7 @@
 Deploy the project including `scripts/worker-once.js` and `src/worker.js`.
 The worker opens no HTTP port. Each invocation takes the existing database
 worker lock, recovers interrupted jobs, schedules due work, processes a snapshot
-of at most two queued jobs, checks publication again, and closes its database
+of at most one queued job, checks publication again, and closes its database
 connections before exiting. Overlapping invocations skip while the lock is held.
 
 ## Configure the web application
@@ -54,3 +54,5 @@ each have provider timeouts. Hostinger stops each cron invocation after 30 minut
 treated as a free retry; the next owner marks interrupted jobs failed for review.
 This script does not remove hosting execution-time or persistent-storage limits.
 Rotate or archive the log periodically to avoid unlimited disk usage.
+
+The worker allows 25 minutes for generation and yields before another provider call would exceed that budget. Research, validated text and completed images remain checkpointed; the next cron run resumes without consuming an error retry. Set `MEDIA_DIRECTORY=/home/u664454343/domains/autoblogging.snaprytr.com/hbuilds/media` in the environment shared by the app and cron to store images outside deployment versions. Copy existing images from `data/media/` to that directory before switching it on; the application does not relocate old files automatically.

@@ -10,7 +10,7 @@ function fixture(owner = true) {
     acquireWorker: async () => { calls.push('lock'); return owner; },
     cleanSessions: async () => calls.push('sessions'),
     queuedJobs: async limit => {
-      assert.equal(limit, 2);
+      assert.equal(limit, 1);
       calls.push('queue');
       return [{ workspace: 'workspace', value: { id: 'job-1' } }];
     },

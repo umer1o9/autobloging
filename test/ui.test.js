@@ -9,7 +9,7 @@ test('automation landing view renders setup, safely escapes site names, and open
   const app = { innerHTML: '' }, modal = { open: false, showModal() { this.open = true; } };
   const document = { querySelector: s => s === '#app' ? app : modal, addEventListener() {} };
   const script = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
-  await runInNewContext(`(async () => { ${script}\nautomationDialog('site-test'); document.websitesHtml = websites(); document.activityHtml = jobsPage(); })()`, {
+  await runInNewContext(`(async () => { ${script}\nautomationDialog('site-test'); selectedSite = 'site-test'; document.websitesHtml = websites(); document.activityHtml = jobsPage(); })()`, {
     document, fetch: async () => ({ ok: true, json: async () => ({ user: { name: 'Test', email: 'test@example.com' }, sites: [site], articles: [], topics: [{ id: 'topic-test', siteId: site.id, title: 'A dated activity' }], jobs: [{ id: 'job-test', siteId: site.id, topicId: 'topic-test', stage: 'review', status: 'completed', createdAt: '2026-10-22T10:00:00.000Z', completedAt: '2026-10-22T12:44:00.000Z', reservedCents: 100 }], provider: { ready: false, models: {} } }) }),
     setInterval: () => 1, clearInterval() {}, Intl, console
   });

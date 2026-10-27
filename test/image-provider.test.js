@@ -29,3 +29,18 @@ test('image generation stays disabled until paid generation and a provider key a
   assert.equal(provider.ready('gemini'), false); assert.equal(provider.ready('openai'), false);
   await assert.rejects(() => provider.generate({ provider: 'gemini', prompt: 'test' }), /not configured/);
 });
+
+test('persistent media directory survives provider recreation and rejects traversal', async t => {
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const directory = await mkdtemp(join(tmpdir(), 'autoblog-media-test-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const settings = { ...env, MEDIA_DIRECTORY: directory };
+  const provider = createImageProvider(settings, async () => Response.json({ data: [{ b64_json: bytes }] }));
+  const image = await provider.generate({ provider: 'openai', model: 'gpt-image-1', prompt: 'Fixture' });
+  const filename = new URL(image.url).pathname.split('/').pop();
+  const restarted = createImageProvider(settings);
+  assert.equal((await restarted.read(filename)).byteLength, 160);
+  await assert.rejects(restarted.read('../.env'), /Invalid media filename/);
+});
