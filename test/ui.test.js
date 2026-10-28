@@ -60,3 +60,28 @@ test('article library can open a dedicated full-page reader', async () => {
   assert.match(app.innerHTML, /Copy article/);
   assert.match(app.innerHTML, /Download Word/);
 });
+
+test('unpublish works from library and reader without a review dialog', async () => {
+  const script = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  for (const reader of [false, true]) {
+    const site = { ...website(), id: 'site-test' };
+    const article = { id: 'article-test', siteId: site.id, title: 'A published article', status: 'published', revision: 7, content: { title: 'A published article', author: 'Editor', excerpt: '' }, html: '<p>Article body</p>' };
+    const app = { innerHTML: '' }, events = {}, calls = [];
+    const modal = { open: false, classList: { add() {}, remove() {} } };
+    const document = { querySelector: selector => selector === '#app' ? app : modal, addEventListener: (event, callback) => { events[event] = callback; } };
+    await runInNewContext(`(async () => { ${script}\npage = 'review'; render(); document.libraryHtml = app.innerHTML; ${reader ? "await openFullArticle('article-test');" : ''} document.before = app.innerHTML; await document.clickUnpublish(); })()`, {
+      document: Object.assign(document, { clickUnpublish: () => events.click({ preventDefault() {}, target: { closest: () => ({ dataset: { action: 'unpublish', id: article.id }, disabled: false }) } }) }),
+      fetch: async (path, options = {}) => {
+        if (path.endsWith('/unpublish')) { calls.push(JSON.parse(options.body)); article.status = 'draft'; }
+        return { ok: true, json: async () => path.startsWith('/api/articles/') ? { article } : { user: { name: 'Test', email: 'test@example.com' }, sites: [site], articles: [article], topics: [], jobs: [], provider: { ready: false, models: {} } } };
+      },
+      setInterval: () => 1, clearInterval() {}, setTimeout: () => 1, clearTimeout() {}, Intl, Date, console
+    });
+    assert.match(document.libraryHtml, /data-action="unpublish"/);
+    assert.match(document.before, /data-action="unpublish"/);
+    assert.deepEqual(calls, [{ revision: 7 }]);
+    assert.doesNotMatch(app.innerHTML, /data-action="unpublish"/);
+    assert.match(app.innerHTML, /draft/i);
+    assert.equal(modal.open, false);
+  }
+});

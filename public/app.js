@@ -8,6 +8,12 @@ function routeFromPath(path = typeof location === 'undefined' ? '/' : location.p
 }
 const initialRoute = routeFromPath();
 let data, page = initialRoute.page, selectedSite = '', register = true, toastTimer, refreshTimer, editingArticle, viewingArticle, articleReturnPage = 'review';
+let deliveryResources, deliveryLoadError = '';
+async function loadDeliveryDocs() {
+  if (deliveryResources) return;
+  try { deliveryResources = await api('/api/delivery-documentation'); deliveryLoadError = ''; }
+  catch (error) { deliveryLoadError = error.message; }
+}
 let calendarMonth = '', calendarDate = '', expandedDays = new Set(), filterWorkspace;
 const browserTimezone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 const calendarTimezone = () => data?.sites.find(site => site.id === selectedSite)?.timezone || browserTimezone();
@@ -100,6 +106,7 @@ function navigatePage(nextPage, articleId, replace = false) {
 async function restoreRoute(replace = false) {
   const route = routeFromPath(); page = route.page; viewingArticle = null;
   readViewState();
+  if (page === 'api') await loadDeliveryDocs();
   if (route.articleId) ({ article: viewingArticle } = await api(`/api/articles/${route.articleId}`));
   syncViewUrl(true);
   render();
@@ -112,13 +119,13 @@ function authScreen() {
   clearInterval(refreshTimer);
   app.innerHTML = `<div class="auth"><section class="auth-story"><div class="brand"><div class="logo">a</div><div>autoblog <span>studio</span></div></div><h1>Good content.<br>Every website.<br>One workspace.</h1><p>Move from a promising idea to a reviewed article, then deliver it to any website through one simple API.</p><div class="auth-flow"><div>01 &nbsp; Plan content for each website</div><div>02 &nbsp; Research, write, and review</div><div>03 &nbsp; Publish on your schedule</div></div><footer>Set your themes. Choose your review policy. Automate publishing.</footer></section><section class="auth-form"><div class="auth-form-inner"><div class="eyebrow">Your content operations, together</div><h2>${register ? 'Create your workspace' : 'Welcome back'}</h2><p class="subtext">${register ? 'Start with your first website. Add more whenever you’re ready.' : 'Sign in to continue your publishing workflow.'}</p><form id="auth-form">${register ? field('Workspace name', 'name', '', 'text', 'required placeholder="e.g. Acme content team" maxlength="100"') : ''}${field('Email address', 'email', '', 'email', 'required autocomplete="email" placeholder="you@company.com"')}${field('Password', 'password', '', 'password', `required minlength="12" maxlength="256" autocomplete="${register ? 'new-password' : 'current-password'}"`)}<span class="help">At least 12 characters.</span><div id="auth-error" class="error hidden" role="alert"></div><button class="primary" type="submit">${register ? 'Create workspace →' : 'Sign in →'}</button></form><div class="auth-toggle">${register ? 'Already have a workspace?' : 'New to AutoBlog?'} ${btn('toggle-auth', register ? 'Sign in' : 'Create workspace', '', 'ghost')}</div><p class="footer-note">Local development preview · Your data stays in this installation.</p></div></section></div>`;
 }
-async function refresh() { data = await api('/api/dashboard'); if (filterWorkspace !== filterKey()) readViewState(); if (selectedSite && !data.sites.some(s => s.id === selectedSite)) { selectedSite = ''; syncViewUrl(); } render(); }
+async function refresh() { data = await api('/api/dashboard'); if (page === 'api') await loadDeliveryDocs(); if (filterWorkspace !== filterKey()) readViewState(); if (selectedSite && !data.sites.some(s => s.id === selectedSite)) { selectedSite = ''; syncViewUrl(); } render(); }
 function startPolling() { clearInterval(refreshTimer); refreshTimer = setInterval(async () => { if (modal.open) return; try { await refresh(); } catch { /* Keep current view during temporary connection failures. */ } }, 10000); }
 function heading(title, description, actions = '') { return `<div class="page-heading"><div><div class="eyebrow">Content operations</div><h1>${title}</h1><p class="subtext">${description}</p></div><div class="actions">${actions}</div></div>`; }
 function empty(icon, title, description, action = '') { return `<div class="empty"><div class="empty-icon">${icon}</div><h3>${title}</h3><p>${description}</p>${action}</div>`; }
 function articleTable(articles) {
   if (!articles.length) return empty('▤', 'Your next article starts with an idea', 'Add a topic, prepare a draft, and bring it here for review.', btn('topic', '+ Add topic', '', 'primary'));
-  return `<div class="table-wrap"><table><thead><tr><th>Article</th><th>Website</th><th>Status</th><th></th></tr></thead><tbody>${articles.map(a => `<tr><td class="row-title">${e(a.title)}<small>Revision ${a.revision}</small></td><td>${e(siteName(a.siteId))}</td><td>${badge(a.status)}</td><td><div class="actions">${btn('view-article', 'View full page', a.id, 'primary')}${btn('edit-article', 'Review / edit', a.id)}</div></td></tr>`).join('')}</tbody></table></div>`;
+  return `<div class="table-wrap"><table><thead><tr><th>Article</th><th>Website</th><th>Status</th><th></th></tr></thead><tbody>${articles.map(a => `<tr><td class="row-title">${e(a.title)}<small>Revision ${a.revision}</small></td><td>${e(siteName(a.siteId))}</td><td>${badge(a.status)}</td><td><div class="actions">${btn('view-article', 'View full page', a.id, 'primary')}${btn('edit-article', 'Review / edit', a.id)}${a.status === 'published' ? btn('unpublish', 'Unpublish', a.id, 'danger') : ''}</div></td></tr>`).join('')}</tbody></table></div>`;
 }
 function analyticsDashboard() {
   const sites = selectedSite ? data.sites.filter(site => site.id === selectedSite) : data.sites;
@@ -224,10 +231,43 @@ function jobsPage() {
   const jobs = filtered(data.jobs);
   return heading('Generation activity', 'Follow research, writing, validation, and failures for each job.') + `<div class="notice warning"><div><strong>Reservations are not actual charges</strong>Job allowances stay reserved for the month, including failed attempts. Billing reconciliation and provider-enforced spend caps are not implemented in this local milestone.</div></div><section class="panel">${jobs.length ? `<div class="table-wrap"><table><thead><tr><th>Topic</th><th>Stage</th><th>Status</th><th>Date &amp; time</th><th>Last message</th><th>Reserved</th><th></th></tr></thead><tbody>${jobs.map(j => `<tr><td class="row-title">${e(data.topics.find(t => t.id === j.topicId)?.title)}<small>${e(siteName(j.siteId))}</small></td><td>${e(j.stage)}</td><td>${badge(j.status)}</td><td>${activityTime(j)}</td><td>${e(j.error || (j.retryAt ? `Next retry: ${new Date(j.retryAt).toLocaleString()}` : 'No error'))}</td><td>${usd(j.reservedCents)}</td><td>${btn('job', 'Details', j.id)}</td></tr>`).join('')}</tbody></table></div>` : empty('↻', 'No generation jobs yet', 'AI jobs appear here after you configure a provider and generate a topic.')}</section>`;
 }
+function siteDeliveryDocumentation(site) {
+  const base = location.origin, endpoint = `${base}/api/v1/sites/${encodeURIComponent(site.id)}/articles`;
+  const slug = data.articles.find(article => article.siteId === site.id && article.status === 'published' && article.slug)?.slug || 'ARTICLE_SLUG';
+  const listing = `${endpoint}?limit=12&offset=0`, detail = `${endpoint}/${encodeURIComponent(slug)}`;
+  const environment = `AUTOBLOG_BASE_URL=${base}\nAUTOBLOG_SITE_ID=${site.id}\nAUTOBLOG_API_KEY=YOUR_WEBSITE_DELIVERY_KEY`;
+  const example = url => `const response = await fetch(\n  ${JSON.stringify(url)},\n  { headers: { Authorization: \`Bearer \${process.env.AUTOBLOG_API_KEY}\` } }\n);\nif (!response.ok) throw new Error(\`AutoBlog HTTP \${response.status}\`);\nconst result = await response.json();`;
+  const snippets = { listing, detail, environment, 'listing-code': example(listing), 'detail-code': example(detail) };
+  const guide = deliveryResources ? `# ${site.name} — API Integration\n\nReceiving website: ${site.url}\nWebsite ID: ${site.id}\n\n` + deliveryResources.guide.replaceAll('https://autoblogging.snaprytr.com', base).replaceAll('YOUR_WEBSITE_ID', site.id).replaceAll('how-to-plan-a-software-development-roadmap', slug) : '';
+  const openapi = deliveryResources ? JSON.parse(JSON.stringify(deliveryResources.openapi)) : null;
+  if (openapi) {
+    openapi.info.title = `${site.name} — Article Delivery API`;
+    openapi.servers = [{ url: base, description: 'AutoBlog API host' }];
+    for (const path of Object.values(openapi.paths)) for (const operation of Object.values(path)) {
+      for (const parameter of operation.parameters || []) {
+        if (parameter.name === 'siteId') parameter.schema = { ...parameter.schema, default: site.id, example: site.id };
+        if (parameter.name === 'slug') parameter.schema = { ...parameter.schema, example: slug };
+      }
+    }
+  }
+  return { snippets, guide, openapi, slug };
+}
 function integration() {
-  const site = data.sites.find(s => s.id === selectedSite) || data.sites[0];
-  const endpoint = `${location.origin}/api/v1/sites/${site?.id || 'YOUR_SITE_ID'}/articles`;
-  return heading('Delivery API', 'Published content, ready for the website you already have.') + `<div class="split"><section class="panel"><div class="panel-head"><h2>Connect your frontend</h2><span class="badge">REST · JSON</span></div><div class="panel-body integration-steps"><div class="integration-step"><h3>Create a website delivery key</h3><p class="subtext">Keys can only read published content for one website. Keep the key in your website’s server environment.</p><br>${site ? btn('key', site.hasApiKey ? 'Rotate delivery key' : 'Create delivery key', site.id, 'primary') : btn('site', 'Add a website first', '', 'primary')}</div><div class="integration-step"><h3>Fetch published articles</h3><pre>${e(`const response = await fetch(\n  '${endpoint}?limit=20',\n  { headers: {\n    Authorization: \`Bearer \${process.env.AUTOBLOG_API_KEY}\`\n  }}\n);\nif (!response.ok) throw new Error('Content API failed');\nconst { articles, total } = await response.json();`)}</pre><p class="subtext">Use <code>?offset=20&amp;limit=20</code> for pagination. Retrieve a single article by adding <code>/{slug}</code> to this URL.</p></div><div class="integration-step"><h3>Render articles on your website</h3><p class="subtext">Each article includes a title, slug, metadata, structured sections, FAQs, references, and safely generated HTML. Your website owns routing, canonical URLs, sitemap updates, and SEO rendering.</p></div></div></section><div><section class="panel"><div class="panel-head"><h2>Delivery rules</h2></div><div class="panel-body"><ul class="checklist"><li><span class="checkmark">✓</span><div>Published content only<small>Drafts and future scheduled articles never appear.</small></div></li><li><span class="checkmark">✓</span><div>One key, one website<small>Keys cannot access another site or admin actions.</small></div></li><li><span class="checkmark">✓</span><div>Server-to-server integration<small>Use your own backend as a proxy. Do not embed delivery keys in browser JavaScript.</small></div></li><li><span class="checkmark">○</span><div>Webhooks come later<small>This milestone provides pull-based REST delivery.</small></div></li></ul></div></section></div></div>`;
+  const site = data.sites.find(item => item.id === selectedSite);
+  const selector = `<section class="panel"><div class="api-site-picker"><div><label for="api-documentation-site">Documentation for website</label><select id="api-documentation-site"><option value="">Select a website…</option>${data.sites.map(item => `<option value="${e(item.id)}" ${item.id === selectedSite ? 'selected' : ''}>${e(item.name)} · ${e(item.url)}</option>`).join('')}</select></div><p class="subtext">Choose a connected website to get its own endpoints, examples and downloadable documentation. Your selection is saved.</p></div></section>`;
+  const title = heading('Delivery API documentation', 'Two APIs for every website: article listing and full article details.');
+  if (!data.sites.length) return title + `<section class="panel">${empty('⤴', 'Add a website first', 'Each website has its own delivery ID and API key.', btn('site', '+ Add website', '', 'primary'))}</section>`;
+  if (!site) return title + selector + `<section class="panel">${empty('⤴', 'Choose a website above', 'Listing and detail documentation will use the selected website’s ID. No website is selected automatically.')}</section>`;
+  const docs = siteDeliveryDocumentation(site), slug = docs.slug, snippet = (key, label) => `<div class="api-example"><div class="api-example-head"><strong>${label}</strong>${btn('copy-api-snippet', 'Copy', key)}</div><pre>${e(docs.snippets[key])}</pre></div>`;
+  return title + selector + (deliveryLoadError ? `<div class="notice warning"><div><strong>Full guide temporarily unavailable</strong>${e(deliveryLoadError)} ${btn('reload-api-docs', 'Retry loading guide')}</div></div>` : '') + `<section class="panel"><div class="panel-head"><div><h2>${e(site.name)} integration</h2><p class="help">${e(site.url)} · Website ID: <code>${e(site.id)}</code></p></div><div class="actions">${btn('copy-api-guide', 'Copy full guide', site.id)}${btn('download-api-guide', 'Download guide (.md)', site.id)}${btn('download-api-openapi', 'Download OpenAPI', site.id)}</div></div><div class="panel-body"><h3>Authentication</h3><p class="subtext">Call both APIs from your receiving website’s backend with <code>Authorization: Bearer YOUR_WEBSITE_DELIVERY_KEY</code>. Keep the key private. These documentation exports contain placeholders, never your real key.</p><div class="actions api-key-actions">${btn('key', site.hasApiKey ? 'Rotate delivery key' : 'Create delivery key', site.id, 'primary')}</div>${snippet('environment', 'Receiving website environment')}</div></section>
+  <div class="api-endpoint-grid"><section class="panel"><div class="panel-head"><h2>1. Article listing</h2><span class="badge">GET</span></div><div class="panel-body"><p class="subtext">Use for your website’s blog listing and article cards.</p>${snippet('listing', 'Listing endpoint')}${snippet('listing-code', 'Backend JavaScript example')}<h3>Pagination</h3><p class="subtext"><code>limit</code>: 1–100 (default 20). <code>offset</code>: 0 or greater (default 0). For page two with 12 articles, use <code>offset=12</code>.</p><h3>Response</h3><pre>${e(JSON.stringify({ articles: ['ARTICLE_OBJECT'], total: 25, offset: 0, limit: 12 }, null, 2))}</pre><p class="help">Newest publications first. Each entry currently includes full content and HTML. Use title, slug, excerpt, coverImage and publishedAt for your cards.</p></div></section>
+  <section class="panel"><div class="panel-head"><h2>2. Article details</h2><span class="badge">GET</span></div><div class="panel-body"><p class="subtext">Use for a complete article page on your website.</p>${snippet('detail', 'Article details endpoint')}${snippet('detail-code', 'Backend JavaScript example')}<h3>Which article?</h3><p class="subtext">Use <code>slug</code> from the listing, not the article ID. ${docs.snippets.detail.endsWith('/ARTICLE_SLUG') ? 'Replace ARTICLE_SLUG with a published article slug.' : 'The example uses a published article from this website.'}</p><h3>Response</h3><pre>${e(JSON.stringify({ article: { title: 'Article title', slug, html: '<article>Complete article HTML</article>', sections: [], coverImage: { url: 'IMAGE_URL', alt: 'Image description' } } }, null, 2))}</pre><p class="help">Abbreviated example. Full responses also include FAQs, references, author profile, visual summary, comparison table, tags and metadata.</p></div></section></div>
+  <section class="panel"><div class="panel-head"><h2>Render and troubleshoot</h2></div><div class="panel-body api-reference"><div><h3>Rendering</h3><p>Use <code>article.html</code> for the complete article fragment, or build your own components from <code>sections</code>. The HTML already includes its title, cover and inline images. Add your own page CSS, metadata, canonical URL and sitemap entries.</p></div><div><h3>Publication and images</h3><p>Only published articles are delivered. Drafts and future scheduled articles are excluded. Image URLs are absolute; allow the API host in your image configuration and display images only when their URLs are present.</p></div><div><h3>Errors</h3><p><strong>400:</strong> invalid pagination. <strong>401:</strong> incorrect, rotated or mismatched website key. <strong>404:</strong> wrong slug or unpublished article. <strong>500:</strong> backend failure—save the request ID. Handle empty/non-JSON hosting errors separately.</p></div></div></section>
+  <section class="panel"><details class="api-full-guide"><summary>Complete integration guide for ${e(site.name)} — JavaScript, PHP, cURL, fields and checklist</summary><pre>${e(docs.guide || 'The full guide could not be loaded. Use the endpoint documentation above and retry loading the guide.')}</pre></details></section>`;
+}
+function downloadApiFile(filename, content, type) {
+  const url = URL.createObjectURL(new Blob([content], { type })), link = document.createElement('a');
+  link.href = url; link.download = filename; document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
 }
 async function openFullArticle(id, pushRoute = true) {
   const { article } = await api(`/api/articles/${id}`);
@@ -242,7 +282,7 @@ function fullArticleView() {
   if (!viewingArticle) return empty('▤', 'Article unavailable', 'Return to the article library and select an article.', btn('nav-review', 'Back to article library', '', 'primary'));
   const article = viewingArticle, site = data.sites.find(item => item.id === article.siteId);
   const published = article.publishedAt ? new Date(article.publishedAt).toLocaleString('en', { timeZone: site?.timezone }) : null;
-  return `<div class="reader-toolbar">${btn('back-article', '← Back')}<div class="actions">${badge(article.status)}${btn('copy-article', 'Copy article', article.id)}${btn('download-article', 'Download Word', article.id, 'primary')}${btn('edit-article', article.status === 'published' ? 'Article details' : 'Review / edit', article.id)}</div></div><section class="reader-page"><header class="reader-hero"><div class="eyebrow">${e(site?.name || 'Article')}${article.content.category ? ` · ${e(article.content.category)}` : ''}</div><h1>${e(article.content.title)}</h1><p>${e(article.content.excerpt)}</p><div class="reader-meta">By ${e(article.content.author)} · Revision ${article.revision}${published ? ` · Published ${e(published)} ${e(site?.timezone || '')}` : ''}${article.content.tags?.length ? ` · ${article.content.tags.map(e).join(', ')}` : ''}</div></header><div class="reader-content">${article.html}</div>${article.research?.sources?.length ? `<footer class="reader-sources"><h2>Research sources</h2><ol>${article.research.sources.map(source => `<li><a href="${e(source.url)}" target="_blank" rel="noopener noreferrer">${e(source.title)}</a></li>`).join('')}</ol></footer>` : ''}</section>`;
+  return `<div class="reader-toolbar">${btn('back-article', '← Back')}<div class="actions">${badge(article.status)}${btn('copy-article', 'Copy article', article.id)}${btn('download-article', 'Download Word', article.id, 'primary')}${btn('edit-article', article.status === 'published' ? 'Article details' : 'Review / edit', article.id)}${article.status === 'published' ? btn('unpublish', 'Unpublish', article.id, 'danger') : ''}</div></div><section class="reader-page"><header class="reader-hero"><div class="eyebrow">${e(site?.name || 'Article')}${article.content.category ? ` · ${e(article.content.category)}` : ''}</div><h1>${e(article.content.title)}</h1><p>${e(article.content.excerpt)}</p><div class="reader-meta">By ${e(article.content.author)} · Revision ${article.revision}${published ? ` · Published ${e(published)} ${e(site?.timezone || '')}` : ''}${article.content.tags?.length ? ` · ${article.content.tags.map(e).join(', ')}` : ''}</div></header><div class="reader-content">${article.html}</div>${article.research?.sources?.length ? `<footer class="reader-sources"><h2>Research sources</h2><ol>${article.research.sources.map(source => `<li><a href="${e(source.url)}" target="_blank" rel="noopener noreferrer">${e(source.title)}</a></li>`).join('')}</ol></footer>` : ''}</section>`;
 }
 function articleExportHtml(article, site) {
   const published = article.publishedAt ? new Date(article.publishedAt).toLocaleString('en', { timeZone: site?.timezone }) : '';
@@ -320,7 +360,7 @@ function readArticleFields() {
 }
 document.addEventListener('input', event => { if (event.target.closest('#article-fields')) editingArticle.dirty = true; });
 document.addEventListener('change', event => {
-  if (['site-filter', 'website-summary-select'].includes(event.target.id)) selectWebsite(event.target.value);
+  if (['site-filter', 'website-summary-select', 'api-documentation-site'].includes(event.target.id)) selectWebsite(event.target.value);
   if (event.target.id === 'calendar-date' && validDate(event.target.value)) {
     calendarDate = event.target.value; calendarMonth = calendarDate.slice(0, 7); syncViewUrl(false); render();
   }
@@ -342,7 +382,21 @@ document.addEventListener('click', async event => {
       }
       syncViewUrl(false); render(); document.querySelector(`[data-action="${action}"]`)?.focus?.(); return;
     }
-    if (action.startsWith('nav-')) { navigatePage(action.slice(4)); return; }
+    if (action.startsWith('nav-')) { if (action === 'nav-api') await loadDeliveryDocs(); navigatePage(action.slice(4)); return; }
+    if (action === 'reload-api-docs') { await loadDeliveryDocs(); render(); return; }
+    if (['copy-api-snippet', 'copy-api-guide', 'download-api-guide', 'download-api-openapi'].includes(action)) {
+      const site = data.sites.find(item => item.id === selectedSite);
+      if (!site) throw new Error('Select a website first.');
+      await loadDeliveryDocs();
+      if (action !== 'copy-api-snippet' && !deliveryResources) throw new Error(deliveryLoadError || 'Full guide is unavailable.');
+      const docs = siteDeliveryDocumentation(site);
+      const filename = `autoblog-${site.id}`;
+      if (action === 'download-api-guide') { downloadApiFile(`${filename}-guide.md`, docs.guide, 'text/markdown;charset=utf-8'); return toast('Website integration guide downloaded.'); }
+      if (action === 'download-api-openapi') { downloadApiFile(`${filename}-openapi.json`, JSON.stringify(docs.openapi, null, 2), 'application/json'); return toast('Website OpenAPI specification downloaded.'); }
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard access is unavailable in this browser.');
+      await navigator.clipboard.writeText(action === 'copy-api-guide' ? docs.guide : docs.snippets[id]);
+      return toast('Website documentation copied.');
+    }
     if (action === 'view-article') { if (modal.open) modal.close(); await openFullArticle(id); return; }
     if (action === 'back-article') { navigatePage(articleReturnPage || 'review'); return; }
     if (action === 'copy-article') { if (!viewingArticle) throw new Error('Open an article before copying it.'); await copyArticle(viewingArticle, data.sites.find(site => site.id === viewingArticle.siteId)); return toast('Article copied. You can paste it into Microsoft Word or another editor.'); }
@@ -382,7 +436,15 @@ document.addEventListener('click', async event => {
     }
     if (action === 'reject') return openDialog('Return article for changes', `<form id="transition-form" data-action="reject" data-id="${id}">${area('Reason for rejection', 'reason')}<div class="dialog-foot">${btn('close', 'Cancel')}<button type="submit" class="primary">Save rejection</button></div></form>`);
     if (action === 'schedule') { if (editingArticle.dirty) throw new Error('Save your changes and obtain approval again before scheduling.'); return openDialog('Schedule publication', `<form id="transition-form" data-action="schedule" data-id="${id}">${field('Publication date and time', 'scheduledAt', '', 'datetime-local', 'required')}<p class="help">Enter time in your browser timezone (${e(Intl.DateTimeFormat().resolvedOptions().timeZone)}). The calendar displays the website’s configured timezone. Publication makes the article available in the REST API.</p><div class="dialog-foot">${btn('close', 'Cancel')}<button type="submit" class="primary">Schedule article</button></div></form>`); }
-    if (action === 'unpublish') { await api(`/api/articles/${id}/unpublish`, 'POST', { revision: editingArticle.revision }); await refresh(); await articleDialog(id); return toast('Article removed from the delivery API.'); }
+    if (action === 'unpublish') {
+      const reopenReview = modal.open && editingArticle?.id === id;
+      const { article } = await api(`/api/articles/${id}`);
+      await api(`/api/articles/${id}/unpublish`, 'POST', { revision: article.revision });
+      await refresh();
+      if (page === 'article' && viewingArticle?.id === id) await openFullArticle(id, false);
+      if (reopenReview) await articleDialog(id);
+      return toast('Article unpublished and kept as a draft. Removed from the delivery API.');
+    }
   } catch (error) { if (modal.open) errorInDialog(error); else toast(error.message); }
   finally { button.disabled = false; }
 });

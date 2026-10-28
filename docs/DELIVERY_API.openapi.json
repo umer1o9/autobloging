@@ -1,0 +1,631 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "AutoBlog Studio Delivery API",
+    "version": "1.0.0",
+    "description": "Read-only, website-specific delivery of published articles. Call from the receiving backend; do not expose the key in browser code. Listing entries currently contain the full article payload. No webhooks, search filters or incremental sync endpoint."
+  },
+  "servers": [
+    {
+      "url": "https://autoblogging.snaprytr.com",
+      "description": "Production"
+    },
+    {
+      "url": "http://localhost:3210",
+      "description": "Local development"
+    }
+  ],
+  "security": [
+    {
+      "websiteDeliveryKey": []
+    }
+  ],
+  "paths": {
+    "/api/v1/sites/{siteId}/articles": {
+      "get": {
+        "operationId": "listPublishedArticles",
+        "summary": "List published articles",
+        "description": "Newest publication first, then article ID descending. Empty/out-of-range pages return an empty articles array with 200. No trailing slash.",
+        "parameters": [
+          {
+            "name": "siteId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Website ID associated with the Bearer delivery key."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "headers": {
+              "x-request-id": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Request identifier for server-side investigation."
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "API responses currently use no-store."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArticleList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid pagination.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid website delivery key, or site/key mismatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown endpoint or article not currently published.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected application/database error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/articles/{slug}": {
+      "get": {
+        "operationId": "getPublishedArticle",
+        "summary": "Get complete article by slug",
+        "description": "Use slug from listing, not article UUID. Returns 404 for missing or unpublished content. No trailing slash.",
+        "parameters": [
+          {
+            "name": "siteId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Website ID associated with the Bearer delivery key."
+          },
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "headers": {
+              "x-request-id": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Request identifier for server-side investigation."
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "API responses currently use no-store."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "article": {
+                      "$ref": "#/components/schemas/Article"
+                    }
+                  },
+                  "required": [
+                    "article"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid pagination.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid website delivery key, or site/key mismatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown endpoint or article not currently published.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected application/database error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "websiteDeliveryKey": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Website-specific ab_read_ delivery key created in AutoBlog Studio. Not a Gemini/OpenAI key or admin password."
+      }
+    },
+    "schemas": {
+      "Image": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "alt": {
+            "type": "string"
+          },
+          "caption": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "generatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "alt",
+          "caption",
+          "prompt",
+          "provider",
+          "model",
+          "generatedAt"
+        ],
+        "description": "Image URL and metadata; all fields may be empty strings. Only render non-empty URLs."
+      },
+      "Subsection": {
+        "type": "object",
+        "properties": {
+          "heading": {
+            "type": "string"
+          },
+          "paragraphs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "bullets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "heading",
+          "paragraphs",
+          "bullets"
+        ]
+      },
+      "Section": {
+        "type": "object",
+        "properties": {
+          "heading": {
+            "type": "string"
+          },
+          "paragraphs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "bullets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "subsections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Subsection"
+            }
+          },
+          "image": {
+            "$ref": "#/components/schemas/Image"
+          }
+        },
+        "required": [
+          "heading",
+          "paragraphs",
+          "bullets",
+          "subsections",
+          "image"
+        ]
+      },
+      "Article": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "excerpt": {
+            "type": "string"
+          },
+          "metaDescription": {
+            "type": "string"
+          },
+          "author": {
+            "type": "string"
+          },
+          "directAnswer": {
+            "type": "string"
+          },
+          "primaryKeyword": {
+            "type": "string"
+          },
+          "searchIntent": {
+            "type": "string"
+          },
+          "coverImage": {
+            "$ref": "#/components/schemas/Image"
+          },
+          "sections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Section"
+            }
+          },
+          "visualSummary": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "caption": {
+                "type": "string"
+              },
+              "steps": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "title": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "title",
+                    "description"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "title",
+              "description",
+              "caption",
+              "steps"
+            ]
+          },
+          "table": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "intro": {
+                "type": "string"
+              },
+              "headers": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "rows": {
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "required": [
+              "title",
+              "intro",
+              "headers",
+              "rows"
+            ]
+          },
+          "faqs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "question": {
+                  "type": "string"
+                },
+                "answer": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "question",
+                "answer"
+              ]
+            }
+          },
+          "references": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "title",
+                "url"
+              ]
+            }
+          },
+          "internalLinks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "title",
+                "url"
+              ]
+            }
+          },
+          "authorBio": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "bio": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "bio"
+            ]
+          },
+          "callToAction": {
+            "type": "object",
+            "properties": {
+              "heading": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "heading",
+              "description",
+              "label",
+              "url"
+            ]
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "publishedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Stored update time or publication time fallback; not a change-feed cursor."
+          },
+          "html": {
+            "type": "string",
+            "description": "Article HTML fragment, including title and images; CSS and page metadata are provided by the receiving website."
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "title",
+          "category",
+          "excerpt",
+          "metaDescription",
+          "author",
+          "directAnswer",
+          "primaryKeyword",
+          "searchIntent",
+          "coverImage",
+          "sections",
+          "visualSummary",
+          "table",
+          "faqs",
+          "references",
+          "internalLinks",
+          "authorBio",
+          "callToAction",
+          "tags",
+          "publishedAt",
+          "updatedAt",
+          "html"
+        ]
+      },
+      "ArticleList": {
+        "type": "object",
+        "properties": {
+          "articles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Article"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "articles",
+          "total",
+          "offset",
+          "limit"
+        ]
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error",
+          "requestId"
+        ]
+      }
+    }
+  }
+}

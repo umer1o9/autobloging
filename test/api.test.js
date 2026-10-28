@@ -20,10 +20,15 @@ test('REST API: auth, tenant isolation, revision workflow, publication, key rota
     return { response, status: response.status, body: await response.json(), cookie: response.headers.get('set-cookie')?.split(';')[0] };
   }
   assert.equal((await call('/api/dashboard')).status, 401);
+  assert.equal((await call('/api/delivery-documentation')).status, 401);
   assert.equal((await call('/api/auth/register', { method: 'POST', input: { email: 'a@example.com', password: 'long-test-password', name: 'Workspace A' }, headers: { origin: 'https://attacker.example' } })).status, 403);
   assert.equal((await call('/api/auth/login', { method: 'POST', input: { email: 'missing@example.com', password: 'long-test-password' }, headers: { origin: 'http://127.0.0.1' } })).status, 401);
   assert.equal((await call('/api/auth/login', { method: 'POST', input: { email: 'missing@example.com', password: 'long-test-password' }, headers: { origin: 'http://localhost' } })).status, 401);
   const first = await call('/api/auth/register', { method: 'POST', input: { email: 'a@example.com', password: 'long-test-password', name: 'Workspace A' } });
+  const documentation = await call('/api/delivery-documentation', { cookie: first.cookie });
+  assert.equal(documentation.status, 200);
+  assert.match(documentation.body.guide, /Article listing/);
+  assert.equal(Object.keys(documentation.body.openapi.paths).length, 2);
   assert.equal(first.status, 200); assert.ok(first.response.headers.get('set-cookie').includes('HttpOnly'));
   assert.ok(!JSON.stringify(first.body).includes('password'));
   const second = await call('/api/auth/register', { method: 'POST', input: { email: 'b@example.com', password: 'another-test-password', name: 'Workspace B' } });
@@ -49,6 +54,14 @@ test('REST API: auth, tenant isolation, revision workflow, publication, key rota
   assert.equal((await call(`/api/v1/sites/${site.id}/articles/reviewed-publishing-workflow`, { bearer: key })).status, 200);
   assert.equal((await call(`/api/v1/sites/${site.id}/articles?limit=-1`, { bearer: key })).status, 400);
   assert.equal((await call('/api/dashboard', { cookie: second.cookie })).body.articles.length, 0);
+  assert.equal((await call(`/api/articles/${article.id}/unpublish`, { cookie: second.cookie, method: 'POST', input: { revision: 2 } })).status, 404);
+  assert.equal((await call(`/api/articles/${article.id}/unpublish`, { cookie: first.cookie, method: 'POST', input: { revision: 1 } })).status, 409);
+  const unpublished = await call(`/api/articles/${article.id}/unpublish`, { cookie: first.cookie, method: 'POST', input: { revision: 2 } });
+  assert.equal(unpublished.status, 200);
+  assert.equal(unpublished.body.article.status, 'draft');
+  assert.equal((await call(`/api/v1/sites/${site.id}/articles`, { bearer: key })).body.total, 0);
+  assert.equal((await call(`/api/v1/sites/${site.id}/articles/reviewed-publishing-workflow`, { bearer: key })).status, 404);
+  assert.equal((await call(`/api/articles/${article.id}`, { cookie: first.cookie })).status, 200);
   await call(`/api/sites/${site.id}/key`, { cookie: first.cookie, method: 'POST', input: {} });
   assert.equal((await call(`/api/v1/sites/${site.id}/articles`, { bearer: key })).status, 401);
   await call('/api/auth/logout', { cookie: first.cookie, method: 'POST', input: {} });

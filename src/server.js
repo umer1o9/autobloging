@@ -112,6 +112,12 @@ export async function createApp({ database = process.env.DATABASE_URL, origin = 
       }
       if (path.startsWith('/api/')) {
         const user = await session(req), workspace = user.workspace;
+        if (path === '/api/delivery-documentation' && method === 'GET') {
+          return send(res, 200, {
+            guide: readFileSync(new URL('../docs/DELIVERY_API_INTEGRATION.md', import.meta.url), 'utf8'),
+            openapi: JSON.parse(readFileSync(new URL('../docs/DELIVERY_API.openapi.json', import.meta.url), 'utf8'))
+          });
+        }
         if (path === '/api/auth/me' && method === 'GET') return send(res, 200, { user });
         if (path === '/api/auth/logout' && method === 'POST') {
           const token = req.headers.cookie?.split(';').map(s => s.trim()).find(s => s.startsWith('ab_session='))?.slice(11);
