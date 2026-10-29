@@ -24,16 +24,18 @@ export class Store {
       const [[lock]] = await connection.execute('SELECT GET_LOCK(?, 30) AS acquired', [name]);
       if (!lock.acquired) throw new Error('Another schema migration is running.');
       await connection.query('CREATE TABLE IF NOT EXISTS schema_migrations (version INT PRIMARY KEY, applied_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)) ENGINE=InnoDB');
-      const [applied] = await connection.execute('SELECT version FROM schema_migrations WHERE version=1');
-      if (!applied.length) {
-        const sql = await readFile(new URL('../migrations/001_initial.sql', import.meta.url), 'utf8');
-        for (const statement of sql.split(';').map(x => x.trim()).filter(Boolean)) await connection.query(statement);
-        await connection.execute('INSERT INTO schema_migrations (version) VALUES (1)');
+      for (const [version, file] of [[1, '001_initial.sql'], [2, '002_website_knowledge.sql']]) {
+        const [applied] = await connection.execute('SELECT version FROM schema_migrations WHERE version=?', [version]);
+        if (!applied.length) {
+          const sql = await readFile(new URL(`../migrations/${file}`, import.meta.url), 'utf8');
+          for (const statement of sql.split(';').map(x => x.trim()).filter(Boolean)) await connection.query(statement);
+          await connection.execute('INSERT INTO schema_migrations (version) VALUES (?)', [version]);
+        }
       }
     } finally { await connection.execute('SELECT RELEASE_LOCK(?)', [name]).catch(() => {}); connection.release(); }
   }
   async assertSchema() {
-    const rows = await this.query('SELECT version FROM schema_migrations WHERE version=1');
+    const rows = await this.query('SELECT version FROM schema_migrations WHERE version=2');
     if (!rows.length) throw new Error('Run npm run db:migrate before starting the application.');
   }
   async transaction(fn, scope = 'global') {
@@ -107,6 +109,31 @@ export class Store {
     const rows = await this.query("SELECT j.workspace_id AS workspace,j.payload FROM jobs j JOIN websites s ON s.id=j.site_id AND s.workspace_id=j.workspace_id WHERE j.status='queued' AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(s.payload,'$.generationPaused')),'false') <> 'true' AND (COALESCE(JSON_UNQUOTE(JSON_EXTRACT(j.payload,'$.automationGenerated')),'false') <> 'true' OR JSON_UNQUOTE(JSON_EXTRACT(s.payload,'$.automation.enabled'))='true') ORDER BY j.created_at,j.id LIMIT 100");
     const current = Date.now();
     return rows.map(r => ({ workspace: r.workspace, value: parse(r.payload) })).filter(row => !row.value.retryAt || new Date(row.value.retryAt).getTime() <= current).slice(0, limit);
+  }
+  async getKnowledge(workspace, site) {
+    const [row] = await this.query('SELECT payload FROM website_knowledge WHERE workspace_id=? AND site_id=?', [workspace, site]);
+    return row ? parse(row.payload) : null;
+  }
+  async progressKnowledge(workspace, site, run, value) {
+    const result = await this.query("UPDATE website_knowledge SET payload=? WHERE workspace_id=? AND site_id=? AND JSON_UNQUOTE(JSON_EXTRACT(payload,'$.runId'))=?", [JSON.stringify(value), workspace, site, run]);
+    return result.affectedRows > 0;
+  }
+  async pendingKnowledge() {
+    return (await this.query("SELECT workspace_id AS workspace,site_id AS site,payload FROM website_knowledge WHERE JSON_UNQUOTE(JSON_EXTRACT(payload,'$.status')) IN ('queued','running') ORDER BY JSON_UNQUOTE(JSON_EXTRACT(payload,'$.updatedAt')) LIMIT 1")).map(row => ({ workspace: row.workspace, site: row.site, value: parse(row.payload) }));
+  }
+  async putKnowledge(workspace, site, value) {
+    await this.query('INSERT INTO website_knowledge (workspace_id,site_id,payload) VALUES (?,?,?) ON DUPLICATE KEY UPDATE payload=VALUES(payload)', [workspace, site, JSON.stringify(value)]);
+  }
+  async putPage(workspace, site, run, page) {
+    const { createHash } = await import('node:crypto');
+    await this.query('INSERT INTO website_pages (workspace_id,site_id,run_id,url_hash,payload) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE payload=VALUES(payload)', [workspace, site, run, createHash('sha256').update(page.url).digest('hex'), JSON.stringify(page)]);
+  }
+  async knowledgePages(workspace, site, run) {
+    if (!run) return [];
+    return (await this.query('SELECT payload FROM website_pages WHERE workspace_id=? AND site_id=? AND run_id=? ORDER BY url_hash', [workspace, site, run])).map(row => parse(row.payload));
+  }
+  async cleanKnowledgePages(workspace, site, keep) {
+    await this.query('DELETE FROM website_pages WHERE workspace_id=? AND site_id=? AND run_id<>?', [workspace, site, keep || '']);
   }
   async reserved(workspace, site, month) { const [row] = await this.query("SELECT COALESCE(SUM(reserved_cents),0) AS reserved FROM jobs WHERE workspace_id=? AND site_id=? AND (created_at>=? OR status IN ('queued','running'))", [workspace, site, `${month}-01T00:00:00.000Z`]); return Number(row.reserved); }
   async audit(workspace, site, action, entity) { await this.query('INSERT INTO audit_events (id,workspace_id,site_id,action,entity_id,created_at) VALUES (?,?,?,?,?,?)', [randomUUID(), workspace, site, action, entity, new Date().toISOString()]); }

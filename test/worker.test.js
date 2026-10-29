@@ -16,7 +16,7 @@ function fixture(owner = true) {
     },
     get: async () => ({ status: 'completed', stage: 'review' })
   };
-  const domain = Object.fromEntries(['recoverInterrupted', 'automate', 'publishDue'].map(name => [name, async () => calls.push(name)]));
+  const domain = Object.fromEntries(['recoverInterrupted', 'syncWebsites', 'automate', 'publishDue'].map(name => [name, async () => calls.push(name)]));
   domain.runJob = async (workspace, id) => { assert.equal(workspace, 'workspace'); assert.equal(id, 'job-1'); calls.push('run'); };
   return { store, domain, calls };
 }
@@ -30,7 +30,7 @@ test('cron skips all recovery and paid work when another worker owns the lock', 
 test('cron performs a bounded pass then schedules and publishes completed work', async () => {
   const { store, domain, calls } = fixture();
   assert.deepEqual(await runWorkerOnce(store, domain, () => {}), { skipped: false, processed: 1 });
-  assert.deepEqual(calls, ['schema', 'lock', 'recoverInterrupted', 'automate', 'publishDue', 'sessions', 'queue', 'run', 'automate', 'publishDue']);
+  assert.deepEqual(calls, ['schema', 'lock', 'recoverInterrupted', 'syncWebsites', 'automate', 'publishDue', 'sessions', 'queue', 'run', 'automate', 'publishDue']);
 });
 
 test('cron refuses to dispatch paid work after losing its worker connection', async () => {

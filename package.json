@@ -12,7 +12,7 @@
     "dev": "node --watch --env-file-if-exists=.env src/server.js",
     "worker:once": "node --env-file-if-exists=.env scripts/worker-once.js",
     "test": "node --env-file-if-exists=.env --test test/*.test.js",
-    "check": "node --check src/server.js && node --check src/domain.js && node --check src/store.js && node --check src/provider.js && node --check src/image-provider.js && node --check public/app.js && node --check scripts/import-sqlite.js && node --check scripts/local-mysql.js && node --check src/worker.js && node --check scripts/worker-once.js",
+    "check": "node --check src/server.js && node --check src/domain.js && node --check src/store.js && node --check src/provider.js && node --check src/image-provider.js && node --check public/app.js && node --check scripts/import-sqlite.js && node --check scripts/local-mysql.js && node --check src/worker.js && node --check scripts/worker-once.js && node --check src/website-fetch.js && node --check src/website-index.js && node --check src/website-knowledge.js",
     "db:migrate": "node --env-file-if-exists=.env scripts/migrate.js",
     "db:import-sqlite": "node --env-file-if-exists=.env scripts/import-sqlite.js",
     "db:local:setup": "node scripts/local-mysql.js setup",
@@ -20,7 +20,10 @@
     "db:local:stop": "node scripts/local-mysql.js stop"
   },
   "dependencies": {
+    "cheerio": "1.2.0",
+    "ipaddr.js": "2.5.0",
     "jsonrepair": "3.15.0",
-    "mysql2": "3.24.6"
+    "mysql2": "3.24.6",
+    "robots-parser": "3.0.1"
   }
 }

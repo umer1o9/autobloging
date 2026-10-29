@@ -197,3 +197,7 @@ The Websites and Calendar pages share a monthly box calendar with article and un
 Writer requests include a JSON response schema and only the research memo/source list. Invalid or truncated writer output can consume remaining writing passes (at most three total, with at most one JSON repair call per pass). The pass counter persists across transient job retries. Safety refusals, configuration failures and ambiguous network interruptions stop for inspection. Activity retains failed-call usage when available and safe response diagnostics (model, finish/block reason, output length and JSON status); it does not retain rejected article text. Failed existing jobs are not replayed automatically.
 
 Integrating another website? See the [Delivery API integration guide](docs/DELIVERY_API_INTEGRATION.md) and [OpenAPI specification](docs/DELIVERY_API.openapi.json) for published-article listing and detail endpoints.
+
+## Website knowledge
+
+Select a website under **Websites** to resync its public pages, browse/download saved Markdown and search its knowledge index. The existing worker resumes bounded crawl batches and uses relevant passages during article generation. See [website knowledge and deployment notes](docs/WEBSITE_KNOWLEDGE.md). This feature requires database migration **2**; no new environment variables are needed.

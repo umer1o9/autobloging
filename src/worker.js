@@ -8,6 +8,7 @@ export async function runWorkerOnce(store, domain, log = console.log) {
     return { skipped: true, processed: 0 };
   }
   await time('recovery', () => domain.recoverInterrupted());
+  await time('website knowledge sync', () => domain.syncWebsites(log));
   await time('scheduling', () => domain.automate());
   await time('publication', () => domain.publishDue());
   await time('session cleanup', () => store.cleanSessions());

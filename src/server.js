@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { knowledgeSummary } from './website-knowledge.js';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
@@ -126,11 +127,19 @@ export async function createApp({ database = process.env.DATABASE_URL, origin = 
         }
         if (path === '/api/dashboard' && method === 'GET') {
           const [siteRecords, topics, articleRecords, jobRecords] = await Promise.all([store.list('site', workspace), store.list('topic', workspace), store.list('article', workspace), store.list('job', workspace)]);
-          const sites = await Promise.all(siteRecords.map(async s => ({ ...domain.safeSite(s), reservedCents: await domain.reserved(workspace, s.id) })));
-          return send(res, 200, { user, sites, topics, articles: articleRecords.map(({ content, research, ...a }) => ({ ...a, title: content.title, slug: content.slug })), jobs: jobRecords.map(({ research, candidate, settings, ...j }) => j), provider: { ready: provider.ready, models: provider.models, images: { configured: imageProvider.configured, defaults: imageProvider.defaults, models: imageProvider.models } } });
+          const sites = await Promise.all(siteRecords.map(async s => ({ ...domain.safeSite(s), reservedCents: await domain.reserved(workspace, s.id), knowledge: knowledgeSummary(await store.getKnowledge(workspace, s.id)) })));
+          return send(res, 200, { user, sites, topics, articles: articleRecords.map(({ content, research, ...a }) => ({ ...a, title: content.title, slug: content.slug })), jobs: jobRecords.map(({ research, candidate, settings, websiteKnowledge, ...j }) => j), provider: { ready: provider.ready, models: provider.models, images: { configured: imageProvider.configured, defaults: imageProvider.defaults, models: imageProvider.models } } });
         }
         if (path === '/api/sites' && method === 'POST') return send(res, 201, { site: await domain.saveSite(workspace, await body(req)) });
         let match;
+        if ((match = path.match(/^\/api\/sites\/([^/]+)\/knowledge(?:\/(sync|document|search))?$/))) {
+          await domain.need('site', workspace, match[1]);
+          if (method === 'POST' && match[2] === 'sync') return send(res, 202, { knowledge: await domain.queueWebsiteSync(workspace, match[1]) });
+          if (method === 'GET' && match[2] === 'search') return send(res, 200, await domain.knowledge.context(workspace, match[1], (url.searchParams.get('q') || '').slice(0,500)));
+          if (method === 'GET' && match[2] === 'document') return send(res, 200, { markdown: await domain.knowledge.document(workspace, match[1], url.searchParams.get('url')) });
+          if (method === 'GET' && !match[2]) return send(res, 200, await domain.knowledge.view(workspace, match[1]));
+          throw new AppError(405, 'Method not allowed.');
+        }
         if ((match = path.match(/^\/api\/sites\/([^/]+)$/)) && method === 'PUT') return send(res, 200, { site: await domain.saveSite(workspace, await body(req), match[1]) });
         if ((match = path.match(/^\/api\/sites\/([^/]+)\/automation$/)) && method === 'POST') return send(res, 200, { site: await domain.configureAutomation(workspace, match[1], await body(req)) });
         if ((match = path.match(/^\/api\/sites\/([^/]+)\/automation\/run$/)) && method === 'POST') {
@@ -175,6 +184,7 @@ export async function createApp({ database = process.env.DATABASE_URL, origin = 
     const tick = async () => {
       if (closing || !store.workerActive || activeTick) return;
       activeTick = (async () => {
+        await domain.syncWebsites(message => console.log(message));
         await domain.automate();
         await domain.publishDue();
         await store.cleanSessions();

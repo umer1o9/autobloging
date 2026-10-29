@@ -1,5 +1,6 @@
 import { randomUUID, randomBytes, createHash } from 'node:crypto';
 import { normalizeArticle, validateArticle, httpUrl, emptyArticle, renderArticle } from './content.js';
+import { WebsiteKnowledge } from './website-knowledge.js';
 import { timedOperation } from './timing.js';
 
 export class AppError extends Error { constructor(status, message) { super(message); this.status = status; } }
@@ -9,7 +10,7 @@ const now = () => new Date().toISOString();
 const int = (v, min, max, name) => { requireValue(Number.isInteger(v) && v >= min && v <= max, `${name} must be between ${min} and ${max}.`); return v; };
 const money = (v, name) => { requireValue(Number.isFinite(v) && v >= 0 && v <= 100000, `${name} must be a non-negative USD amount.`); return Math.round(v * 100); };
 export class Domain {
-  constructor(store, provider, imageProvider = { configured: {}, defaults: {}, ready: () => false }) { this.store = store; this.provider = provider; this.imageProvider = imageProvider; this.running = new Set(); }
+  constructor(store, provider, imageProvider = { configured: {}, defaults: {}, ready: () => false }) { this.store = store; this.provider = provider; this.imageProvider = imageProvider; this.running = new Set(); this.knowledge = new WebsiteKnowledge(store); }
   async need(kind, workspace, id) { const value = (await this.store.get(kind, workspace, id)); requireValue(value, 'Not found.', 404); return value; }
   safeSite(site) { const { apiKeyHash, ...safe } = site; return { ...safe, hasApiKey: !!apiKeyHash }; }
   async saveSite(workspace, input, id) {
@@ -39,8 +40,13 @@ export class Domain {
         createdAt: previous.createdAt || now() };
       requireValue(site.jobBudgetCents <= site.monthlyBudgetCents, 'Job allowance cannot exceed the monthly budget.');
       (await this.store.put('site', workspace, site.id, site)); (await this.store.audit(workspace, site.id, id ? 'website.updated' : 'website.created', site.id));
+      if (!id || previous.url !== url) await this.knowledge.queue(workspace, site);
       return this.safeSite(site);
     }, workspace));
+  }
+  async syncWebsites(log) { return this.knowledge.runBatch(log); }
+  async queueWebsiteSync(workspace, id) {
+    return this.store.transaction(async () => this.knowledge.queue(workspace, await this.need('site', workspace, id)), workspace);
   }
   async configureAutomation(workspace, id, input) {
     return this.store.transaction(async () => {
@@ -333,8 +339,11 @@ export class Domain {
       job = (await this.store.transaction(async () => { const j = (await this.need('job', workspace, id)); if (j.status !== 'queued') return null; const currentSite = await this.need('site', workspace, j.siteId); if (currentSite.generationPaused || (j.automationGenerated && !currentSite.automation?.enabled)) return null; j.status = 'running'; j.attempts = (j.attempts || 0) + 1; (await this.store.put('job', workspace, j.siteId, j)); return j; }, workspace));
       console.log(`[worker] ${now()} job=${id} after claiming job claimed=${!!job} elapsedMs=${Date.now() - claimStarted}`);
       if (!job) return;
-      let topic = (await this.need('topic', workspace, job.topicId)); const site = job.settings.site;
+      let topic = (await this.need('topic', workspace, job.topicId)); const site = { ...job.settings.site };
       const checkpoint = async patch => { Object.assign(job, patch); (await this.store.put('job', workspace, job.siteId, job)); };
+      const knowledge = job.websiteKnowledge || await this.knowledge.context(workspace, site.id, `${topic.title} ${topic.brief || ''} ${site.audience || ''}`);
+      site.knowledgeContext = knowledge.passages.map(passage => `URL: ${passage.url}\nTitle: ${passage.title}\nFetched: ${passage.fetchedAt}\n${passage.text}`).join('\n\n---\n\n');
+      if (!job.websiteKnowledge && knowledge.passages.length) await checkpoint({ websiteKnowledge: knowledge });
       if (!job.research) {
         ensureTime(6 * 60000);
         (await checkpoint({ stage: 'research' }));
@@ -349,6 +358,9 @@ export class Domain {
           topic = { ...topic, ...research.selectedTopic, normalized, discoveredAt: now() };
           await this.store.put('topic', workspace, site.id, topic);
           await this.store.audit(workspace, site.id, 'topic.discovered', topic.id);
+          const specific = await this.knowledge.context(workspace, site.id, `${topic.title} ${topic.brief || ''}`);
+          site.knowledgeContext = specific.passages.map(passage => `URL: ${passage.url}\nTitle: ${passage.title}\nFetched: ${passage.fetchedAt}\n${passage.text}`).join('\n\n---\n\n');
+          await checkpoint({ websiteKnowledge: specific });
         }
       }
       requireValue(job.research.sources.length >= 2, 'Research returned fewer than two usable sources. Revise the topic and retry.');

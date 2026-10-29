@@ -189,10 +189,18 @@ function automationDialog(id) {
 function websiteActions(site) {
   return `<div class="actions">${site.automation?.enabled ? btn('automation-run', 'Generate article now', site.id, 'primary') : btn('automation-settings', 'Set up automation', site.id, 'primary')}${btn('site', 'Website settings', site.id)}${btn('key', site.hasApiKey ? 'Rotate API key' : 'Create API key', site.id)}</div>`;
 }
+function knowledgePanel(site) {
+  const k = site.knowledge || { status: 'not_synced', indexedPages: 0 };
+  return `<section class="panel knowledge-panel"><div class="panel-head"><div><h2>Website knowledge</h2><p class="help">Saved public pages help the AI understand this website before choosing and writing articles.</p></div>${badge(k.status)}</div><div class="panel-body"><p><strong>${k.indexedPages || 0} indexed pages</strong>${k.lastSyncedAt ? ` · Last synced ${e(new Date(k.lastSyncedAt).toLocaleString())}` : ' · No completed sync yet'}</p>${['queued','running'].includes(k.status) ? `<p class="help">${k.pageCount || 0} saved this run · ${k.processed || 0} URLs processed · ${k.pending || 0} pending. Your cron/worker processes the sync in batches.</p>` : ''}${k.error || k.warning ? `<p class="${k.error ? 'error' : 'knowledge-warning'}">${e(k.error || k.warning)}</p>` : ''}<div class="actions">${btn('knowledge-sync', ['queued','running'].includes(k.status) ? 'Sync in progress' : 'Resync website', site.id, 'primary')}${btn('knowledge', 'View saved pages', site.id)}${k.indexedPages ? btn('knowledge-download', 'Download Markdown', site.id) : ''}</div><p class="help">Public HTML only · Up to 200 pages · MySQL storage with local text-vector retrieval. Full details and exclusions are available in View saved pages.</p></div></section>`;
+}
+async function knowledgeDialog(id) {
+  const { knowledge: k, pages } = await api(`/api/sites/${id}/knowledge`);
+  openDialog('Website knowledge · ' + siteName(id), `<p>${badge(k.status)} · ${k.indexedPages || 0} indexed pages · ${k.pageCount || 0} saved in current run · ${k.pending || 0} URLs pending</p><p class="help">${e(k.indexType || '')}. The latest completed/partial snapshot is used by the AI; an in-progress resync keeps the previous snapshot available. It supplements independent research.</p>${k.error || k.warning ? `<div class="notice warning">${e(k.error || k.warning)}</div>` : ''}<div class="actions">${btn('knowledge', 'Refresh status', id)}${btn('knowledge-sync', 'Resync website', id)}${pages.length ? btn('knowledge-download', 'Download all Markdown', id) : ''}</div><div class="knowledge-search"><label for="knowledge-query">Find relevant website passages</label><input id="knowledge-query" maxlength="500" placeholder="e.g. services, target audience, software integrations">${btn('knowledge-search', 'Search saved content', id)}<div id="knowledge-search-results" aria-live="polite"></div></div><div class="table-wrap"><table><thead><tr><th>Saved page</th><th>Details</th><th></th></tr></thead><tbody>${pages.map(page => `<tr><td><strong>${e(page.title || page.url)}</strong><p class="help">${e(page.url)}</p></td><td>${page.headings.length} headings · ${page.textLength} characters<p class="help">${e(new Date(page.fetchedAt).toLocaleString())}</p></td><td><button data-action="knowledge-document" data-id="${e(id)}" data-url="${e(page.url)}">View Markdown</button></td></tr>`).join('') || '<tr><td colspan="3">No saved pages yet. Queue a resync and check again after the worker runs.</td></tr>'}</tbody></table></div>${k.errors?.length ? `<details><summary>Skipped or failed URLs (${k.errors.length} recent)</summary><ul>${k.errors.map(item => `<li><strong>${e(item.url)}</strong><br>${e(item.error)}</li>`).join('')}</ul></details>` : ''}<div class="dialog-foot">${btn('close', 'Close')}</div>`, true);
+}
 function websites() {
   const site = data.sites.find(item => item.id === selectedSite);
   const summary = site ? `<div class="website-summary"><div><h2>${e(site.name)}</h2><p class="subtext">${e(site.url)}</p><p class="help">${site.monthlyVolume} articles / month · ${usd(site.monthlyBudgetCents)} monthly budget · ${site.reviewCapacity} review limit · ${e(site.timezone)} · ${site.publicationPaused ? 'Publication paused' : 'Publication enabled'}</p></div><div>${websiteActions(site)}<p class="help">${site.automation?.enabled ? 'Starts one article immediately using this website’s automatic workflow and safeguards.' : 'Enable automation once to generate articles.'}</p></div></div>` : `<div class="website-summary"><div><h2>All connected websites</h2><p class="subtext">${data.sites.length} websites · ${data.articles.length} articles</p></div><div><label for="website-summary-select">Manage a website</label><select id="website-summary-select"><option value="">Choose a website…</option>${data.sites.map(item => `<option value="${e(item.id)}">${e(item.name)}</option>`).join('')}</select></div></div>`;
-  return heading('Websites', 'Your connected websites and article calendar.', btn('site', '+ Add website', '', 'primary')) + (!data.sites.length ? `<section class="panel">${empty('⌘', 'Connect your first website', 'Add its URL to start planning articles.', btn('site', 'Add a website', '', 'primary'))}</section>` : `<section class="panel">${summary}</section>${monthCalendar()}`);
+  return heading('Websites', 'Your connected websites and article calendar.', btn('site', '+ Add website', '', 'primary')) + (!data.sites.length ? `<section class="panel">${empty('⌘', 'Connect your first website', 'Add its URL to start planning articles.', btn('site', 'Add a website', '', 'primary'))}</section>` : `<section class="panel">${summary}</section>${site ? knowledgePanel(site) : ''}${monthCalendar()}`);
 }
 function topicsPage() {
   const topics = filtered(data.topics);
@@ -427,6 +435,26 @@ document.addEventListener('click', async event => {
     if (action === 'confirm-key') {
       const result = await api(`/api/sites/${id}/key`, 'POST', {}); await refresh();
       return openDialog('Save your delivery key', `<p class="subtext">Shown only once. Store it in the consuming website’s server environment.</p><pre class="key-box">${e(result.key)}</pre><p class="help">Website ID: ${e(id)}</p><div class="dialog-foot">${btn('close', 'I’ve saved the key', '', 'primary')}</div>`);
+    }
+    if (action === 'knowledge') return knowledgeDialog(id);
+    if (action === 'knowledge-sync') {
+      await api(`/api/sites/${id}/knowledge/sync`, 'POST', {});
+      await refresh();
+      if (modal.open) await knowledgeDialog(id);
+      return toast('Website sync queued. The worker will fetch public pages in the background.');
+    }
+    if (action === 'knowledge-search') {
+      const query = document.getElementById('knowledge-query').value.trim();
+      if (!query) throw new Error('Enter a subject to search.');
+      const result = await api(`/api/sites/${id}/knowledge/search?q=${encodeURIComponent(query)}`);
+      document.getElementById('knowledge-search-results').innerHTML = result.passages.map(passage => `<section><strong>${e(passage.title)}</strong><p class="help">${e(passage.url)} · relevance ${passage.score}</p><pre>${e(passage.text)}</pre></section>`).join('') || '<p>No indexed passages yet.</p>';
+      return;
+    }
+    if (['knowledge-document', 'knowledge-download'].includes(action)) {
+      const url = button.dataset.url || '';
+      const { markdown } = await api(`/api/sites/${id}/knowledge/document${url ? '?url=' + encodeURIComponent(url) : ''}`);
+      if (action === 'knowledge-download') return downloadApiFile(`${id}-website-knowledge.md`, markdown, 'text/markdown;charset=utf-8');
+      return openDialog('Saved website page', `<pre class="knowledge-markdown">${e(markdown)}</pre><div class="dialog-foot"><button data-action="knowledge-download" data-id="${e(id)}" data-url="${e(url)}">Download page Markdown</button>${btn('knowledge', 'Back to saved pages', id)}${btn('close', 'Close')}</div>`, true);
     }
     if (action === 'job') { const { job } = await api(`/api/jobs/${id}`); return openDialog('Generation details', `<pre>${e(JSON.stringify(job, null, 2))}</pre>`, true); }
     if (action === 'approve') {

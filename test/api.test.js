@@ -34,6 +34,18 @@ test('REST API: auth, tenant isolation, revision workflow, publication, key rota
   const second = await call('/api/auth/register', { method: 'POST', input: { email: 'b@example.com', password: 'another-test-password', name: 'Workspace B' } });
   const site = (await call('/api/sites', { cookie: first.cookie, method: 'POST', input: website() })).body.site;
   assert.equal((await call(`/api/sites/${site.id}/key`, { cookie: second.cookie, method: 'POST', input: {} })).status, 404);
+  assert.equal((await call(`/api/sites/${site.id}/knowledge`, { cookie: second.cookie })).status, 404);
+  assert.equal((await call(`/api/sites/${site.id}/knowledge/sync`, { cookie: second.cookie, method: 'POST', input: {} })).status, 404);
+  assert.equal((await call(`/api/sites/${site.id}/knowledge`)).status, 401);
+  let crawlCalls = 0;
+  app.domain.knowledge.fetch = async () => { crawlCalls++; throw new Error('Crawling must happen in the worker.'); };
+  const sync = await call(`/api/sites/${site.id}/knowledge/sync`, { cookie: first.cookie, method: 'POST', input: {} });
+  assert.equal(sync.status, 202); assert.equal(sync.body.knowledge.status, 'queued'); assert.equal(crawlCalls, 0);
+  const knowledge = await call(`/api/sites/${site.id}/knowledge`, { cookie: first.cookie });
+  assert.equal(knowledge.status, 200); assert.deepEqual(knowledge.body.pages, []);
+  assert.equal((await call(`/api/sites/${site.id}/knowledge/document`, { cookie: first.cookie })).status, 404);
+  assert.deepEqual((await call(`/api/sites/${site.id}/knowledge/search?q=services`, { cookie: first.cookie })).body.passages, []);
+
   const { key } = (await call(`/api/sites/${site.id}/key`, { cookie: first.cookie, method: 'POST', input: {} })).body;
   const topicResponse = await call(`/api/sites/${site.id}/topics`, { cookie: first.cookie, method: 'POST', input: { title: 'A useful test topic?' } });
   assert.equal(topicResponse.status, 201);
