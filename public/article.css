@@ -1,0 +1,22 @@
+/* Scoped styles for API consumers rendering article.html. */
+.autoblog-article{--article-accent:#12634c;--article-panel:#f4f8f6;--article-border:#d7e4dd;line-height:1.75;overflow-wrap:anywhere}
+.autoblog-article .cover-image{width:100%;margin:28px 0 36px}
+.autoblog-article .cover-image img{display:block;width:100%;max-width:none;height:auto;max-height:none;object-fit:contain;border-radius:16px}
+.autoblog-article .article-image img{max-width:100%;height:auto}
+.autoblog-article .article-image figcaption{font-size:.85em;line-height:1.5;margin-top:10px}
+.autoblog-article .visual-summary{padding:clamp(18px,4vw,32px);margin:32px 0;background:var(--article-panel);border:1px solid var(--article-border);border-radius:16px}
+.autoblog-article .visual-summary h2{margin:8px 0 16px}
+.autoblog-article .visual-summary ol{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;list-style:none;padding:0;margin:24px 0}
+.autoblog-article .visual-summary li{display:flex;align-items:flex-start;gap:14px;padding:18px;border:1px solid var(--article-border);border-radius:12px;background:var(--article-card,#fff)}
+.autoblog-article .visual-summary li>b{display:grid;place-items:center;flex:0 0 34px;height:34px;border-radius:50%;background:var(--article-accent);color:var(--article-on-accent,#fff)}
+.autoblog-article .visual-summary li strong,.autoblog-article .visual-summary li span{display:block}
+.autoblog-article .visual-summary li span{font-size:.9em;margin-top:6px}
+.autoblog-article .article-faqs{margin:40px 0}
+.autoblog-article .article-faqs details{padding:18px 20px;margin:12px 0;border:1px solid var(--article-border);border-radius:12px;background:var(--article-panel)}
+.autoblog-article .article-faqs summary{cursor:pointer;font-weight:700;line-height:1.5}
+.autoblog-article .article-faqs details p{margin:14px 0 0}
+.autoblog-article .related-resources{padding:24px;border:1px solid var(--article-border);border-radius:16px;margin:36px 0}
+.autoblog-article .related-resources h2{margin-top:0}
+.autoblog-article a.article-internal-link,.autoblog-article .related-resources a{color:var(--article-accent);text-decoration:underline;text-underline-offset:3px;font-weight:600}
+.autoblog-article a:focus-visible,.autoblog-article summary:focus-visible{outline:3px solid var(--article-accent);outline-offset:4px}
+@media(max-width:600px){.autoblog-article .visual-summary ol{grid-template-columns:1fr}.autoblog-article .cover-image{margin:20px 0 28px}.autoblog-article .visual-summary li{padding:14px}}

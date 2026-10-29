@@ -454,3 +454,15 @@ Do not change admin-origin settings to bypass browser CORS. Route the integratio
 - [ ] Key rotation and any local caching/synchronization strategy are tested.
 
 Implementation references in this repository: delivery routes in `src/server.js`, delivery projection in `src/domain.js`, pagination/publication queries in `src/store.js`, and normalized fields/HTML generation in `src/content.js`.
+
+## Article presentation stylesheet
+
+When rendering `article.html`, include the scoped stylesheet in your receiving page:
+
+```html
+<link rel="stylesheet" href="https://autoblogging.snaprytr.com/article.css">
+```
+
+It styles the `.autoblog-article` wrapper, a full-width cover, visual summary steps, expanded FAQs and related website resources. The cover loads eagerly; inline images load lazily. Exact internal resource titles appearing in body paragraphs become links to the approved URLs, once per resource; all approved links remain under Related resources. It does not invent links or add missing content to old articles. Existing structured API fields remain available if you build your own components.
+
+For dark themes, override `--article-accent`, `--article-on-accent`, `--article-panel`, `--article-card` and `--article-border` on `.autoblog-article` in your website CSS. Keep the wrapper class when rendering the HTML. Reload or invalidate any cached article HTML after updating AutoBlog to receive the new markup.

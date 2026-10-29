@@ -156,7 +156,7 @@ export async function createApp({ database = process.env.DATABASE_URL, origin = 
         if ((match = path.match(/^\/api\/articles\/([^/]+)\/(approve|reject|schedule|unpublish)$/)) && method === 'POST') return send(res, 200, { article: await domain.transition(workspace, match[1], match[2], await body(req), user.id) });
         throw new AppError(404, 'Endpoint not found.');
       }
-      const files = { '/app.js': ['app.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'] };
+      const files = { '/article.css': ['article.css', 'text/css'], '/app.js': ['app.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'] };
       const appRoutes = new Set(['/', ...Object.values({ automation: '/automation', overview: '/overview', sites: '/websites', topics: '/topics', review: '/articles', calendar: '/calendar', jobs: '/activity', api: '/delivery-api' })]);
       const file = files[path] || (appRoutes.has(path) || /^\/articles\/[^/]+$/.test(path) ? ['index.html', 'text/html'] : null);
       if (method !== 'GET' || !file) throw new AppError(404, 'Not found.');

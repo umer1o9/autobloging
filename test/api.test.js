@@ -50,7 +50,7 @@ test('REST API: auth, tenant isolation, revision workflow, publication, key rota
   assert.equal((await call(`/api/articles/${article.id}/schedule`, { cookie: first.cookie, method: 'POST', input: { revision: 2, scheduledAt: due.toISOString() } })).status, 200);
   await app.domain.publishDue(due);
   const delivery = await call(`/api/v1/sites/${site.id}/articles`, { bearer: key });
-  assert.equal(delivery.body.total, 1); assert.ok(delivery.body.articles[0].html.includes('<article>'));
+  assert.equal(delivery.body.total, 1); assert.match(delivery.body.articles[0].html, /<article\b/);
   assert.equal((await call(`/api/v1/sites/${site.id}/articles/reviewed-publishing-workflow`, { bearer: key })).status, 200);
   assert.equal((await call(`/api/v1/sites/${site.id}/articles?limit=-1`, { bearer: key })).status, 400);
   assert.equal((await call('/api/dashboard', { cookie: second.cookie })).body.articles.length, 0);
