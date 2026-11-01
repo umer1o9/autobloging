@@ -29,9 +29,9 @@ function allowedAdminOrigins(origin) {
   return allowed;
 }
 
-export async function createApp({ database = process.env.DATABASE_URL, origin = process.env.APP_ORIGIN || 'http://127.0.0.1:3210', provider = createProvider(), imageProvider = createImageProvider(), workers = process.env.WORKER_MODE !== 'cron', migrate = false, migrationDatabase = process.env.MIGRATION_DATABASE_URL } = {}) {
+export async function createApp({ database = process.env.DATABASE_URL, origin = process.env.APP_ORIGIN || 'http://127.0.0.1:3210', provider = createProvider(), imageProvider = createImageProvider(), workers = process.env.WORKER_MODE !== 'cron', migrate = false, migrationDatabase = process.env.MIGRATION_DATABASE_URL, httpServer, reportStartup = () => {} } = {}) {
   const store = new Store(database);
-  try { await store.prepareSchema({ migrate, migrationDatabase }); } catch (error) { await store.close(); throw error; }
+  try { await store.prepareSchema({ migrate, migrationDatabase, onPhase: reportStartup }); } catch (error) { await store.close(); throw error; }
   const domain = new Domain(store, provider, imageProvider), throttle = new Map(), adminOrigins = allowedAdminOrigins(origin);
   const imageOrigins = [...adminOrigins].join(' ');
   const send = (res, status, value, headers = {}) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...headers }); res.end(JSON.stringify(value)); };
@@ -49,7 +49,8 @@ export async function createApp({ database = process.env.DATABASE_URL, origin = 
     return user;
   }
   const cookie = value => `ab_session=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${value ? 604800 : 0}${origin.startsWith('https:') ? '; Secure' : ''}`;
-  const server = http.createServer(async (req, res) => {
+  reportStartup('Preparing HTTP routes');
+  const handle = async (req, res) => {
     const requestId = randomUUID();
     const isRunRequest = req.method === 'POST' && /^\/api\/sites\/[^/]+\/automation\/run(?:\?|$)/.test(req.url);
     const runStarted = Date.now();
@@ -176,11 +177,14 @@ export async function createApp({ database = process.env.DATABASE_URL, origin = 
       if (!error.status || error.status >= 500) console.error(JSON.stringify({ event: 'http.request_failed', requestId, method: req.method, path: req.url.split('?')[0], status: error.status || 500, code: error.code || 'APPLICATION_ERROR' }));
       if (!res.headersSent) send(res, error.status || 500, { error: error.status ? error.message : 'Unexpected server error.', requestId }); else res.end();
     }
-  });
+  };
+  const server = httpServer || http.createServer(handle);
   let timer, activeTick, closing = false;
   const inFlight = new Set();
+  reportStartup(workers ? 'Acquiring background worker lock' : 'Configuring cron worker mode');
   const workerOwner = workers && await store.acquireWorker();
   if (workerOwner) {
+    reportStartup('Recovering interrupted generation jobs');
     await domain.recoverInterrupted();
     const tick = async () => {
       if (closing || !store.workerActive || activeTick) return;
@@ -202,7 +206,7 @@ export async function createApp({ database = process.env.DATABASE_URL, origin = 
     };
     timer = setInterval(() => void tick(), 5000).unref();
   }
-  return { server, store, domain, close: async () => {
+  return { server, handle, store, domain, close: async () => {
     closing = true; clearInterval(timer);
     await new Promise(r => server.close(r));
     await activeTick?.catch(() => {});
@@ -217,7 +221,7 @@ const liteSpeedEntry = /(?:^|\/)lsnode\.js$/.test(entryPath);
 
 if (directEntry || liteSpeedEntry) {
   const host = process.env.HOST || '127.0.0.1', port = Number(process.env.PORT || 3210);
-  const startup = startServer({ host, port, initialize: () => createApp({ migrate: true }) });
+  const startup = startServer({ host, port, initialize: (httpServer, reportStartup) => createApp({ migrate: true, httpServer, reportStartup }) });
   void startup.ready.then(() => {
     console.log(`AutoBlog Studio is running on MySQL at ${process.env.APP_ORIGIN || `http://${host}:${port}`}`);
   }).catch(error => {

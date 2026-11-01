@@ -39,8 +39,9 @@ export class Store {
     const rows = await this.query('SELECT version FROM schema_migrations WHERE version=2');
     if (!rows.length) throw Object.assign(new Error('Run npm run db:migrate before starting the application.'), { code: 'SCHEMA_MIGRATION_REQUIRED' });
   }
-  async prepareSchema({ migrate = false, migrationDatabase, log = console.log } = {}) {
-    try { await this.assertSchema(); return; }
+  async prepareSchema({ migrate = false, migrationDatabase, log = console.log, onPhase = () => {} } = {}) {
+    onPhase('Checking database schema');
+    try { await this.assertSchema(); onPhase('Database schema ready'); return; }
     catch (error) {
       if (!migrate || !['SCHEMA_MIGRATION_REQUIRED', 'ER_NO_SUCH_TABLE'].includes(error.code)) throw error;
     }
@@ -50,10 +51,12 @@ export class Store {
         migrator = new Store(migrationDatabase);
         if (migrator.databaseTarget !== this.databaseTarget) throw Object.assign(new Error('MIGRATION_DATABASE_URL must target the same host, port and database as DATABASE_URL.'), { code: 'MIGRATION_TARGET_MISMATCH' });
       }
+      onPhase('Applying pending database migrations');
       log('[startup] Applying pending MySQL migrations. Existing records are retained.');
       await migrator.migrate();
       await this.assertSchema();
       log('[startup] MySQL schema is current.');
+      onPhase('Database schema ready');
     } finally { if (migrator !== this) await migrator.close(); }
   }
   async transaction(fn, scope = 'global') {
