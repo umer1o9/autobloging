@@ -26,14 +26,14 @@ Each article job records the retrieved passages and snapshot run ID in its gener
 
 ## Deployment
 
-This feature adds migration **2** (`migrations/002_website_knowledge.sql`) for `website_knowledge` and `website_pages`. Run:
+This feature adds migration **2** (`migrations/002_website_knowledge.sql`) for `website_knowledge` and `website_pages`. The web entry point now applies pending migrations automatically before it serves application requests. For an explicit deployment migration, run:
 
 ```sh
 npm ci
 npm run db:migrate
 ```
 
-Then restart/redeploy the web app and retain your existing cron command for `scripts/worker-once.js`. No new environment variables are required. In hPanel, run the migration using the deployment/build command (for example `npm ci && npm run db:migrate`) with database environment variables available. Do not replace the web startup file with the worker script.
+Then restart/redeploy the web app and retain your existing cron command for `scripts/worker-once.js`. No new environment variables are required. In hPanel, keep the Entry file as `src/server.js`. No separate command is required when the database account can create the missing tables: startup detects the old schema and upgrades it. You can still run an explicit migration using the deployment/build command (for example `npm ci && npm run db:migrate`) with database environment variables available. If runtime credentials have only data-access privileges, use the existing optional `MIGRATION_DATABASE_URL` with schema-owner credentials for the same host, port and database. The listener binds immediately; HTTP requests receive 503 with Retry-After until schema initialization succeeds. Do not replace the web startup file with the worker script.
 
 ## Private admin endpoints
 

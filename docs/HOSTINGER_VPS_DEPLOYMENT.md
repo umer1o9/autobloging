@@ -2,7 +2,7 @@
 
 AutoBlog Studio supports a persistent scheduler on a VPS or bounded queue passes through hPanel cron. For managed Web/Cloud hosting, follow [hPanel cron setup](HPANEL_CRON.md) and set `WORKER_MODE=cron`. Generated files in `data/media/` still need persistent storage across deployments.
 
-If the application is temporarily deployed through Hostinger's managed Web/Cloud Node.js product, set its **Entry file** to `src/server.js`. The entry remains an ES module, but contains no top-level `await`, so Hostinger's CommonJS LiteSpeed launcher can load it and the application detects that launcher before starting.
+If the application is temporarily deployed through Hostinger's managed Web/Cloud Node.js product, set its **Entry file** to `src/server.js`. The entry remains an ES module, but contains no top-level `await`, so Hostinger's CommonJS LiteSpeed launcher can load it and the application detects that launcher before starting. The HTTP listener now binds before database initialization. Pending migrations are applied automatically using the configured database account (or the existing optional `MIGRATION_DATABASE_URL` for the same database). During initialization the server returns 503 with Retry-After; it only logs that the application is running after the schema is ready. No new environment variables are needed for accounts that already have table-creation permissions.
 
 The recommended layout is:
 

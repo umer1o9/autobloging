@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { startServer } from './startup.js';
 import { knowledgeSummary } from './website-knowledge.js';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -28,9 +29,9 @@ function allowedAdminOrigins(origin) {
   return allowed;
 }
 
-export async function createApp({ database = process.env.DATABASE_URL, origin = process.env.APP_ORIGIN || 'http://127.0.0.1:3210', provider = createProvider(), imageProvider = createImageProvider(), workers = process.env.WORKER_MODE !== 'cron' } = {}) {
+export async function createApp({ database = process.env.DATABASE_URL, origin = process.env.APP_ORIGIN || 'http://127.0.0.1:3210', provider = createProvider(), imageProvider = createImageProvider(), workers = process.env.WORKER_MODE !== 'cron', migrate = false, migrationDatabase = process.env.MIGRATION_DATABASE_URL } = {}) {
   const store = new Store(database);
-  try { await store.assertSchema(); } catch (error) { await store.close(); throw error; }
+  try { await store.prepareSchema({ migrate, migrationDatabase }); } catch (error) { await store.close(); throw error; }
   const domain = new Domain(store, provider, imageProvider), throttle = new Map(), adminOrigins = allowedAdminOrigins(origin);
   const imageOrigins = [...adminOrigins].join(' ');
   const send = (res, status, value, headers = {}) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...headers }); res.end(JSON.stringify(value)); };
@@ -216,11 +217,13 @@ const liteSpeedEntry = /(?:^|\/)lsnode\.js$/.test(entryPath);
 
 if (directEntry || liteSpeedEntry) {
   const host = process.env.HOST || '127.0.0.1', port = Number(process.env.PORT || 3210);
-  void createApp().then(app => {
-    app.server.listen(port, host, () => console.log(`AutoBlog Studio is running on MySQL at ${process.env.APP_ORIGIN || `http://${host}:${port}`}`));
-    for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { void app.close().then(() => process.exit(0)); });
+  const startup = startServer({ host, port, initialize: () => createApp({ migrate: true }) });
+  void startup.ready.then(() => {
+    console.log(`AutoBlog Studio is running on MySQL at ${process.env.APP_ORIGIN || `http://${host}:${port}`}`);
   }).catch(error => {
-    console.error('AutoBlog Studio failed to start.', error);
+    console.error(`AutoBlog Studio failed to start (${error.code || 'STARTUP_ERROR'}): ${error.message}`);
+    console.error('Check database access. Missing migrations require CREATE/ALTER privileges, or a MIGRATION_DATABASE_URL for the same database.');
     process.exitCode = 1;
   });
+  for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { void startup.close().then(() => process.exit(0)); });
 }

@@ -33,7 +33,7 @@ npm run db:local:stop
 
 The app remains at **http://127.0.0.1:3210**. Existing imported accounts and sessions continue to work. New registration creates an independent workspace. Passwords are salted with scrypt, sessions use HttpOnly cookies, and only key/password hashes are stored in the application tables.
 
-For an existing or hosted MySQL service, create a dedicated database/account, copy `.env.example` to `.env`, and configure `DATABASE_URL`. URL-encode reserved characters in credentials. Set `MYSQL_SSL=true` for trusted TLS. Run `npm run db:migrate` before starting. An optional `MIGRATION_DATABASE_URL` can use a separate schema-owner account; the runtime account needs SELECT/INSERT/UPDATE/DELETE on the application schema. The native helper also grants schema-creation permissions to its local application account for convenience.
+For an existing or hosted MySQL service, create a dedicated database/account, copy `.env.example` to `.env`, and configure `DATABASE_URL`. URL-encode reserved characters in credentials. Set `MYSQL_SSL=true` for trusted TLS. The web entry point automatically applies missing migrations before serving the application. You may also run `npm run db:migrate` explicitly during deployment. Startup binds the HTTP listener immediately and returns HTTP 503 with Retry-After while initialization runs, which supports managed hosts with short listen deadlines. An optional `MIGRATION_DATABASE_URL` can use a separate schema-owner account for the same host, port and database; otherwise the existing database account needs schema-creation permissions when an upgrade is pending. Already-current schemas only need the usual SELECT/INSERT/UPDATE/DELETE runtime permissions. The native helper also grants schema-creation permissions to its local application account for convenience.
 
 ```sh
 npm test
@@ -200,4 +200,4 @@ Integrating another website? See the [Delivery API integration guide](docs/DELIV
 
 ## Website knowledge
 
-Select a website under **Websites** to resync its public pages, browse/download saved Markdown and search its knowledge index. The existing worker resumes bounded crawl batches and uses relevant passages during article generation. See [website knowledge and deployment notes](docs/WEBSITE_KNOWLEDGE.md). This feature requires database migration **2**; no new environment variables are needed.
+Select a website under **Websites** to resync its public pages, browse/download saved Markdown and search its knowledge index. The existing worker resumes bounded crawl batches and uses relevant passages during article generation. See [website knowledge and deployment notes](docs/WEBSITE_KNOWLEDGE.md). This feature uses database migration **2**, applied automatically by the web entry point when missing; no new environment variables are needed.

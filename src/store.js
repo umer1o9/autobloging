@@ -11,6 +11,7 @@ export class Store {
     if (!url?.startsWith('mysql://')) throw new Error('Set DATABASE_URL to a MySQL connection URL. See README.md.');
     const uri = new URL(url);
     this.database = decodeURIComponent(uri.pathname.slice(1));
+    this.databaseTarget = `${uri.hostname}:${uri.port || 3306}/${this.database}`;
     this.pool = mysql.createPool({ host: uri.hostname, port: Number(uri.port || 3306), user: decodeURIComponent(uri.username), password: decodeURIComponent(uri.password), database: this.database,
       waitForConnections: true, connectionLimit: 10, queueLimit: 100, charset: 'utf8mb4', timezone: 'Z', supportBigNumbers: true,
       ...(process.env.MYSQL_SSL === 'true' ? { ssl: { rejectUnauthorized: true } } : {}) });
@@ -36,7 +37,24 @@ export class Store {
   }
   async assertSchema() {
     const rows = await this.query('SELECT version FROM schema_migrations WHERE version=2');
-    if (!rows.length) throw new Error('Run npm run db:migrate before starting the application.');
+    if (!rows.length) throw Object.assign(new Error('Run npm run db:migrate before starting the application.'), { code: 'SCHEMA_MIGRATION_REQUIRED' });
+  }
+  async prepareSchema({ migrate = false, migrationDatabase, log = console.log } = {}) {
+    try { await this.assertSchema(); return; }
+    catch (error) {
+      if (!migrate || !['SCHEMA_MIGRATION_REQUIRED', 'ER_NO_SUCH_TABLE'].includes(error.code)) throw error;
+    }
+    let migrator = this;
+    try {
+      if (migrationDatabase) {
+        migrator = new Store(migrationDatabase);
+        if (migrator.databaseTarget !== this.databaseTarget) throw Object.assign(new Error('MIGRATION_DATABASE_URL must target the same host, port and database as DATABASE_URL.'), { code: 'MIGRATION_TARGET_MISMATCH' });
+      }
+      log('[startup] Applying pending MySQL migrations. Existing records are retained.');
+      await migrator.migrate();
+      await this.assertSchema();
+      log('[startup] MySQL schema is current.');
+    } finally { if (migrator !== this) await migrator.close(); }
   }
   async transaction(fn, scope = 'global') {
     if (this.context.getStore()) return fn();
