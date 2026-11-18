@@ -2,6 +2,7 @@ import { randomUUID, randomBytes, createHash } from 'node:crypto';
 import { normalizeArticle, validateArticle, httpUrl, emptyArticle, renderArticle } from './content.js';
 import { WebsiteKnowledge } from './website-knowledge.js';
 import { timedOperation } from './timing.js';
+import { SocialPublishing } from './social.js';
 
 export class AppError extends Error { constructor(status, message) { super(message); this.status = status; } }
 export const hash = value => createHash('sha256').update(value).digest('hex');
@@ -10,9 +11,9 @@ const now = () => new Date().toISOString();
 const int = (v, min, max, name) => { requireValue(Number.isInteger(v) && v >= min && v <= max, `${name} must be between ${min} and ${max}.`); return v; };
 const money = (v, name) => { requireValue(Number.isFinite(v) && v >= 0 && v <= 100000, `${name} must be a non-negative USD amount.`); return Math.round(v * 100); };
 export class Domain {
-  constructor(store, provider, imageProvider = { configured: {}, defaults: {}, ready: () => false }) { this.store = store; this.provider = provider; this.imageProvider = imageProvider; this.running = new Set(); this.knowledge = new WebsiteKnowledge(store); }
+  constructor(store, provider, imageProvider = { configured: {}, defaults: {}, ready: () => false }) { this.store = store; this.provider = provider; this.imageProvider = imageProvider; this.running = new Set(); this.knowledge = new WebsiteKnowledge(store); this.social = new SocialPublishing(store); }
   async need(kind, workspace, id) { const value = (await this.store.get(kind, workspace, id)); requireValue(value, 'Not found.', 404); return value; }
-  safeSite(site) { const { apiKeyHash, ...safe } = site; return { ...safe, hasApiKey: !!apiKeyHash }; }
+  safeSite(site) { const { apiKeyHash, facebookConnection, facebookApp, linkedinConnection, linkedinApp, ...safe } = site; return { ...safe, hasApiKey: !!apiKeyHash }; }
   async saveSite(workspace, input, id) {
     return (await this.store.transaction(async () => {
       const previous = id ? (await this.need('site', workspace, id)) : {};
@@ -193,6 +194,7 @@ export class Domain {
       requireValue(!(await this.store.list('article', workspace, article.siteId)).some(a => a.id !== id && a.content.slug && a.content.slug === content.slug), 'Another article already uses this slug.', 409);
       Object.assign(article, { content, revision: article.revision + 1, approvedRevision: null, reviewedBy: null, automaticRevision: null, approvalMethod: null, automationGenerated: false, status: 'draft', scheduledAt: null, rejectionReason: null, updatedAt: now() });
       (await this.store.put('article', workspace, article.siteId, article)); (await this.store.audit(workspace, article.siteId, 'draft.updated', id));
+      await this.social.prepare(workspace, await this.need('site', workspace, article.siteId), article);
       return (await this.articleDetail(workspace, id));
     }, workspace));
   }
@@ -249,6 +251,7 @@ export class Domain {
       if (target === 'cover') current.content.coverImage = generated.image; else current.content.sections[index].image = generated.image;
       Object.assign(current, { revision: current.revision + 1, approvedRevision: null, reviewedBy: null, automaticRevision: null, approvalMethod: null, automationGenerated: false, status: 'draft', scheduledAt: null, updatedAt: now() });
       await this.store.put('article', workspace, current.siteId, current); await this.store.audit(workspace, current.siteId, 'article.image_generated', id);
+      await this.social.prepare(workspace, await this.need('site', workspace, current.siteId), current);
       return this.articleDetail(workspace, id);
     }, workspace);
   }
@@ -273,11 +276,21 @@ export class Domain {
         const scheduledAt = time.toISOString();
         requireValue(!(await this.store.list('article', workspace, article.siteId)).some(a => a.id !== id && a.status === 'scheduled' && a.scheduledAt === scheduledAt), 'This website already has an article in that slot.', 409);
         Object.assign(article, { status: 'scheduled', scheduledAt });
+      } else if (action === 'publish') {
+        requireValue(!site.publicationPaused, 'Publication is paused for this website.', 409);
+        requireValue(['approved', 'scheduled'].includes(article.status) && article.approvedRevision === article.revision, 'Approve the current revision first.', 409);
+        const report = validateArticle(article.content, site);
+        requireValue(report.valid && report.score >= 85, report.errors.join(' ') || 'Quality score is below 85.');
+        Object.assign(article, { status: 'published', publishedAt: now(), scheduledAt: null });
       } else if (action === 'unpublish') {
         requireValue(article.status === 'published', 'Article is not published.', 409);
         Object.assign(article, { status: 'draft', approvedRevision: null, automaticRevision: null, automationGenerated: false, scheduledAt: null, publishedAt: null });
       } else throw new AppError(400, 'Unknown action.');
-      (await this.store.put('article', workspace, article.siteId, article)); (await this.store.audit(workspace, article.siteId, `article.${action}`, id)); return article;
+      await this.store.put('article', workspace, article.siteId, article);
+      if (action === 'publish') await this.social.prepare(workspace, site, article, true);
+      if (action === 'unpublish') await this.social.cancelQueued(workspace, article.id);
+      await this.store.audit(workspace, article.siteId, `article.${action}`, id);
+      return article;
     }, workspace));
   }
   async publishDue(at = new Date()) {
@@ -289,7 +302,9 @@ export class Domain {
         const site = await this.need('site', workspace, article.siteId);
         const validation = validateArticle(article.content, site);
         if (site.publicationPaused || !(article.approvedRevision === article.revision || (site.automation?.enabled && site.automation.mode === 'automatic' && article.automaticRevision === article.revision)) || (article.automationScheduled && !site.automation?.enabled) || !validation.valid || validation.score < 85) return 0;
-        await this.store.put('article', workspace, article.siteId, { ...article, status: 'published', publishedAt: at.toISOString() });
+        const published = { ...article, status: 'published', publishedAt: at.toISOString() };
+        await this.store.put('article', workspace, article.siteId, published);
+        await this.social.prepare(workspace, site, published, true);
         await this.store.audit(workspace, article.siteId, 'article.published', article.id);
         return 1;
       }, workspace);
@@ -410,6 +425,7 @@ export class Domain {
         requireValue(!(await this.store.list('article', workspace, site.id)).some(a => a.content.slug === content.slug), 'Generated slug already exists.');
         const article = { id: randomUUID(), topicId: topic.id, siteId: site.id, status: 'draft', revision: 1, approvedRevision: null, scheduledAt: null, createdAt: now(), automationGenerated: job.automationGenerated === true, content, research: job.research };
         (await this.store.put('article', workspace, site.id, article));
+        await this.social.prepare(workspace, await this.need('site', workspace, site.id), article);
         (await this.store.put('topic', workspace, site.id, { ...currentTopic, status: 'review', articleId: article.id }));
         (await checkpoint({ status: 'completed', stage: 'review', articleId: article.id, completedAt: now() }));
         (await this.store.audit(workspace, site.id, 'generation.completed', id));

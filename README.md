@@ -201,3 +201,11 @@ Integrating another website? See the [Delivery API integration guide](docs/DELIV
 ## Website knowledge
 
 Select a website under **Websites** to resync its public pages, browse/download saved Markdown and search its knowledge index. The existing worker resumes bounded crawl batches and uses relevant passages during article generation. See [website knowledge and deployment notes](docs/WEBSITE_KNOWLEDGE.md). This feature uses database migration **2**, applied automatically by the web entry point when missing; no new environment variables are needed.
+
+## MCP access for AI assistants
+
+The `/mcp` endpoint supports separate read and management bearer credentials tied to an existing account, with optional website restrictions. See [MCP setup](docs/MCP.md) for hosting environment variables, client configuration, tools and permissions. The MCP connection page shows the account ID and a downloadable setup guide. No database migration is needed.
+
+## Social publishing
+
+In Websites, select a website and open **Social publishing**. Configure its destinations and public article path to prepare social captions and queue posting when the article goes live. See [social publishing setup](docs/SOCIAL_PUBLISHING.md) for Facebook Page credentials and worker setup.

@@ -48,12 +48,13 @@ test('schema preparation only migrates known missing-schema errors and still sup
   assert.equal(migrated,0);
 });
 
-test('runtime schema preparation upgrades version 1 with the optional migration account and retains websites', async t => {
+test('runtime schema preparation upgrades version 2 with the optional migration account and retains websites', async t => {
   const {store,url}=await testDatabase(t);await store.createWorkspace('workspace-a','A');
   const domain=new Domain(store,{ready:false});const site=await domain.saveSite('workspace-a',website());
-  await store.query('DROP TABLE website_pages');await store.query('DROP TABLE website_knowledge');await store.query('DELETE FROM schema_migrations WHERE version=2');
+  await store.query('DROP TABLE social_posts');await store.query('DELETE FROM schema_migrations WHERE version=3');
   await store.prepareSchema({migrate:true,migrationDatabase:url,log:()=>{}});
   await store.assertSchema();
+  assert.deepEqual(await store.query('SELECT id FROM social_posts'), []);
   assert.equal((await store.get('site','workspace-a',site.id)).name,site.name);
   await store.prepareSchema({migrate:true,log:()=>{throw new Error('Current schemas should not migrate again');}});
 });

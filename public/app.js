@@ -1,5 +1,5 @@
 const app = document.querySelector('#app'), modal = document.querySelector('#modal');
-const pagePaths = { automation: '/automation', overview: '/overview', websites: '/websites', topics: '/topics', review: '/articles', calendar: '/calendar', activity: '/activity', api: '/delivery-api' };
+const pagePaths = { automation: '/automation', overview: '/overview', websites: '/websites', topics: '/topics', review: '/articles', calendar: '/calendar', activity: '/activity', api: '/delivery-api', mcp: '/mcp-connection' };
 function routeFromPath(path = typeof location === 'undefined' ? '/' : location.pathname) {
   const article = path.match(/^\/articles\/([^/]+)$/);
   if (article) return { page: 'article', articleId: decodeURIComponent(article[1]) };
@@ -104,12 +104,19 @@ function navigatePage(nextPage, articleId, replace = false) {
   render();
 }
 async function restoreRoute(replace = false) {
+  const linkedinResult = typeof location === 'undefined' ? null : new URLSearchParams(location.search).get('linkedin');
+  const facebookResult = typeof location === 'undefined' ? null : new URLSearchParams(location.search).get('facebook');
   const route = routeFromPath(); page = route.page; viewingArticle = null;
   readViewState();
   if (page === 'api') await loadDeliveryDocs();
   if (route.articleId) ({ article: viewingArticle } = await api(`/api/articles/${route.articleId}`));
   syncViewUrl(true);
   render();
+  if (page === 'websites' && linkedinResult && selectedSite) {
+    await socialDialog(selectedSite);
+    toast(linkedinResult === 'connected' ? 'LinkedIn connected. Select LinkedIn and enable automatic posting.' : 'LinkedIn sign-in failed. Check the app products and callback URL, then try again.');
+  }
+  if (page === 'websites' && facebookResult) await handleFacebookReturn(facebookResult);
 }
 function openDialog(title, body, wide = false) { modal.className = wide ? 'dialog-wide' : ''; modal.innerHTML = `<div class="dialog-head"><h2>${e(title)}</h2>${btn('close', '✕')}</div><div class="dialog-body">${body}<div id="dialog-error" class="error hidden" role="alert"></div></div>`; if (!modal.open) modal.showModal(); }
 function errorInDialog(error) { const node = document.querySelector('#dialog-error'); if (node) { node.textContent = error.message; node.classList.remove('hidden'); } else toast(error.message); }
@@ -187,7 +194,7 @@ function automationDialog(id) {
   openDialog('Automate ' + site.name, `<form id="automation-form" data-id="${e(id)}">${area('Optional topic guidance', 'themes', (config.themes || []).join('\n'), 'Leave blank for complete website-driven topic discovery. Add one hint per line only when you want to steer the subjects.')}<label for="automation-mode">Publishing mode</label><select name="mode" id="automation-mode"><option value="automatic" ${config.mode !== 'review' ? 'selected' : ''}>Fully automatic — no human input</option><option value="review" ${config.mode === 'review' ? 'selected' : ''}>Require one approval before publishing</option></select><p class="help">Fully automatic mode inspects the website, discovers and researches a topic, validates the generated article, and publishes without human factual review. A failed research or validation step stops that article instead of publishing it.</p><p>${site.monthlyVolume} articles per month, spaced about ${Math.round(30 * 24 / site.monthlyVolume * 10) / 10} hours apart. First job starts immediately. Monthly reservation limit: ${usd(site.monthlyBudgetCents)}.</p><div class="dialog-foot">${btn('close', 'Cancel')}<button type="submit" class="primary">Save & start hands-off flow</button></div></form>`);
 }
 function websiteActions(site) {
-  return `<div class="actions">${site.automation?.enabled ? btn('automation-run', 'Generate article now', site.id, 'primary') : btn('automation-settings', 'Set up automation', site.id, 'primary')}${btn('site', 'Website settings', site.id)}${btn('key', site.hasApiKey ? 'Rotate API key' : 'Create API key', site.id)}</div>`;
+  return `<div class="actions">${site.automation?.enabled ? btn('automation-run', 'Generate article now', site.id, 'primary') : btn('automation-settings', 'Set up automation', site.id, 'primary')}${btn('site', 'Website settings', site.id)}${btn('social', 'Social publishing', site.id)}${btn('key', site.hasApiKey ? 'Rotate API key' : 'Create API key', site.id)}</div>`;
 }
 function knowledgePanel(site) {
   const k = site.knowledge || { status: 'not_synced', indexedPages: 0 };
@@ -196,6 +203,61 @@ function knowledgePanel(site) {
 async function knowledgeDialog(id) {
   const { knowledge: k, pages } = await api(`/api/sites/${id}/knowledge`);
   openDialog('Website knowledge · ' + siteName(id), `<p>${badge(k.status)} · ${k.indexedPages || 0} indexed pages · ${k.pageCount || 0} saved in current run · ${k.pending || 0} URLs pending</p><p class="help">${e(k.indexType || '')}. The latest completed/partial snapshot is used by the AI; an in-progress resync keeps the previous snapshot available. It supplements independent research.</p>${k.error || k.warning ? `<div class="notice warning">${e(k.error || k.warning)}</div>` : ''}<div class="actions">${btn('knowledge', 'Refresh status', id)}${btn('knowledge-sync', 'Resync website', id)}${pages.length ? btn('knowledge-download', 'Download all Markdown', id) : ''}</div><div class="knowledge-search"><label for="knowledge-query">Find relevant website passages</label><input id="knowledge-query" maxlength="500" placeholder="e.g. services, target audience, software integrations">${btn('knowledge-search', 'Search saved content', id)}<div id="knowledge-search-results" aria-live="polite"></div></div><div class="table-wrap"><table><thead><tr><th>Saved page</th><th>Details</th><th></th></tr></thead><tbody>${pages.map(page => `<tr><td><strong>${e(page.title || page.url)}</strong><p class="help">${e(page.url)}</p></td><td>${page.headings.length} headings · ${page.textLength} characters<p class="help">${e(new Date(page.fetchedAt).toLocaleString())}</p></td><td><button data-action="knowledge-document" data-id="${e(id)}" data-url="${e(page.url)}">View Markdown</button></td></tr>`).join('') || '<tr><td colspan="3">No saved pages yet. Queue a resync and check again after the worker runs.</td></tr>'}</tbody></table></div>${k.errors?.length ? `<details><summary>Skipped or failed URLs (${k.errors.length} recent)</summary><ul>${k.errors.map(item => `<li><strong>${e(item.url)}</strong><br>${e(item.error)}</li>`).join('')}</ul></details>` : ''}<div class="dialog-foot">${btn('close', 'Close')}</div>`, true);
+}
+const socialLabels = { facebook: 'Facebook Page', instagram: 'Instagram professional account', linkedin: 'LinkedIn profile', reddit: 'Reddit subreddit', tiktok: 'TikTok (manual posting)', youtube: 'YouTube channel' };
+async function socialDialog(siteId, linked) {
+  const { settings, providerConfigured, posts, facebookLoginReady, facebookLinked, facebookAppId, facebookCallback, linkedinClientId, linkedinLoginReady, linkedinCallback, linkedinLinked, linkedinMember, linkedinActive } = await api(`/api/sites/${siteId}/social`);
+  const destinations = Object.entries(socialLabels).map(([platform, label]) => `<label><input type="checkbox" name="platform" value="${platform}" ${settings.platforms.includes(platform) ? 'checked' : ''}> ${label}${linked ? (linked.includes(platform) ? ' · Linked' : ' · Not linked') : ''}</label>`).join('');
+  const rows = posts.map(post => `<tr><td><strong>${e(post.title)}</strong><p class="help">${e(socialLabels[post.platform])}</p></td><td>${e(post.status.replaceAll('_', ' '))}${post.error ? `<p class="help">${e(post.error)}</p>` : ''}</td><td><div class="actions">${btn('social-post', 'View post', post.id)}${post.postUrl ? `<a href="${e(post.postUrl)}" target="_blank" rel="noopener noreferrer">Open published post</a>` : ''}</div></td></tr>`).join('');
+  const httpsCallback = facebookCallback?.startsWith('https://');
+  const facebookSetup = `<section class="meta-setup">
+    <button type="button" class="meta-setup-info" data-action="facebook-setup-help" aria-label="How to find your Meta app details" aria-controls="facebook-setup-help" aria-expanded="false" title="How to find your Meta app details">i</button>
+    <details ${!facebookLoginReady ? 'open' : ''}>
+      <summary>Configure Meta app</summary>
+    <div id="facebook-setup-help" class="meta-setup-help" hidden>
+      <h3>Find your Meta app details</h3>
+      <ol>
+        <li>Open <a href="https://developers.facebook.com/apps/" target="_blank" rel="noopener noreferrer">Meta for Developers</a>. Select your app or choose <strong>Create App</strong>.</li>
+        <li>Go to <strong>App settings → Basic</strong>. Copy the <strong>App ID</strong>, then click <strong>Show</strong> next to <strong>App Secret</strong> and copy it.</li>
+        <li>In your app’s Facebook Login settings, add the exact callback under <strong>Valid OAuth Redirect URIs</strong>. ${httpsCallback ? `Use <code>${e(facebookCallback)}</code>.` : 'Open Social publishing on your hosted HTTPS AutoBlog Studio to get the callback URL.'}</li>
+        <li>Paste both values below and click <strong>Save Meta app</strong>. On your HTTPS site, click <strong>Log in with Facebook</strong> and choose a Page you manage.</li>
+      </ol>
+    </div>
+      <form id="facebook-settings-form" data-id="${e(siteId)}">
+        ${field('Meta App ID', 'appId', facebookAppId, 'text', 'inputmode="numeric" pattern="[0-9]{1,32}" required')}
+        ${field('Meta App Secret', 'appSecret', '', 'password', 'required autocomplete="new-password"')}
+        <div class="dialog-foot"><button type="submit" class="primary">Save Meta app</button></div>
+      </form>
+    </details>
+  </section>`;
+  const linkedinSetup = `<section class="meta-setup">
+    <p><strong>LinkedIn</strong> · ${linkedinActive ? e(linkedinMember || 'Connected profile') : linkedinLinked ? 'Reconnect to renew access' : 'No profile connected'}</p>
+    <div class="actions">
+      ${linkedinLoginReady ? btn('linkedin-start', linkedinLinked ? 'Reconnect LinkedIn' : 'Connect LinkedIn', siteId, 'primary') : ''}
+      ${linkedinLinked ? btn('linkedin-disconnect', 'Disconnect LinkedIn', siteId) : ''}
+    </div>
+    <details>
+      <summary>Configure LinkedIn app</summary>
+      <ol>
+        <li>Create an app in the <a href="https://www.linkedin.com/developers/apps" target="_blank" rel="noopener noreferrer">LinkedIn Developer Portal</a>. Add <strong>Share on LinkedIn</strong> and <strong>Sign In with LinkedIn using OpenID Connect</strong> under Products.</li>
+        <li>In the Auth tab, copy the Client ID and Client Secret. Register the hosted HTTPS callback ${linkedinCallback?.startsWith('https://') ? `<code>${e(linkedinCallback)}</code>` : 'shown here on your hosted app'}.</li>
+        <li>Save the settings, then connect your profile from the HTTPS app.</li>
+      </ol>
+      <form id="linkedin-settings-form" data-id="${e(siteId)}">
+        ${field('LinkedIn Client ID', 'clientId', linkedinClientId, 'text', 'required')}
+        ${field('LinkedIn Client Secret', 'clientSecret', '', 'password', 'required autocomplete="new-password"')}
+        <div class="dialog-foot"><button type="submit" class="primary">Save LinkedIn app</button></div>
+      </form>
+    </details>
+  </section>`;
+  openDialog('Social publishing · ' + siteName(siteId), `${linkedinSetup}<p>${providerConfigured ? 'A Facebook Page connection is configured.' : 'Connect a Facebook Page to publish automatically.'}</p><div class="actions">${facebookLoginReady ? btn('facebook-start', facebookLinked ? 'Change Facebook Page' : 'Log in with Facebook', siteId, 'primary') : '<p class="help">Save your Meta app below. Facebook sign-in becomes available on the HTTPS version of AutoBlog Studio.</p>'}${facebookLinked ? btn('facebook-disconnect', 'Disconnect Facebook', siteId) : ''}</div>${facebookSetup}<p class="help">Website ID <code>${e(siteId)}</code>. Select destinations to prepare drafts. Connected Facebook Pages and LinkedIn profiles can publish automatically once the public article is live. Other destinations provide drafts for manual posting.</p><form id="social-form" data-id="${e(siteId)}">${field('Public article path', 'path', settings.path, 'text', 'placeholder="/blog/{slug}.html"')}<fieldset><legend>Destinations</legend>${destinations}</fieldset>${field('Subreddit (when Reddit is selected)', 'subreddit', settings.subreddit)}${field('Reddit flair ID (optional)', 'flairId', settings.flairId)}<label><input type="checkbox" name="enabled" ${settings.enabled ? 'checked' : ''}> Publish automatically to connected destinations when the article is live</label><div class="dialog-foot">${providerConfigured ? btn('social-accounts', 'Check linked accounts', siteId) : ''}<button class="primary" type="submit">Save social settings</button></div></form><h3>Recent social posts</h3>${rows ? `<div class="table-wrap"><table><thead><tr><th>Article and destination</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="help">Posts appear here when a new article is generated, saved or published.</p>'}`, true);
+  modal.dataset.socialSite = siteId;
+  modal.socialPosts = posts;
+}
+function socialPostDialog(siteId, post) {
+  const editable = ['draft', 'needs_attention', 'manual'].includes(post.status);
+  const mediaLabel = post.platform === 'youtube' ? 'Public HTTPS video URL' : 'Public HTTPS media URL';
+  openDialog(socialLabels[post.platform] + ' post', `<p><strong>${e(post.title)}</strong></p><p>${e(post.status.replaceAll('_', ' '))}${post.error ? ` · ${e(post.error)}` : ''}</p><p><a href="${e(post.articleUrl)}" target="_blank" rel="noopener noreferrer">Open public article URL</a></p>${editable ? `<form id="social-post-form" data-site="${e(siteId)}" data-id="${e(post.id)}">${area('Post text', 'text', post.text)}${field(mediaLabel, 'mediaUrl', post.mediaUrl, 'url')}${['facebook', 'linkedin'].includes(post.platform) && ['draft', 'needs_attention'].includes(post.status) ? '<label><input type="checkbox" name="queue"> Queue this post if the article is published</label>' : ''}<div class="dialog-foot">${btn('social', 'Back to social publishing', siteId)}${btn('social-copy', 'Copy post text', post.id)}<button class="primary" type="submit">Save post</button></div></form>` : `<pre>${e(post.text)}</pre>${post.mediaUrl ? `<p><a href="${e(post.mediaUrl)}" target="_blank" rel="noopener noreferrer">Open post media</a></p>` : ''}<div class="dialog-foot">${btn('social', 'Back to social publishing', siteId)}${btn('social-copy', 'Copy post text', post.id)}</div>`}`, true);
 }
 function websites() {
   const site = data.sites.find(item => item.id === selectedSite);
@@ -260,10 +322,13 @@ function siteDeliveryDocumentation(site) {
   }
   return { snippets, guide, openapi, slug };
 }
+function mcpIntegration() {
+  return heading('MCP connection', 'Connect AI assistants with separate read and management permissions.') + `<section class="panel"><div class="panel-head"><h2>MCP connection for AI assistants</h2>${btn('download-mcp-guide', 'Download MCP setup guide')}</div><div class="panel-body"><p>Endpoint: <code>${e(location.origin)}/mcp</code></p><p>Account ID for <code>MCP_USER_ID</code>: <code>${e(data.user.id)}</code></p><p class="subtext">Configure separate <code>MCP_READ_TOKEN</code> and <code>MCP_MANAGE_TOKEN</code> secrets in hosting. Read access includes drafts and progress; management also queues articles, resyncs websites and controls publication. Both follow this account’s workspace permissions. Optionally restrict website IDs with <code>MCP_SITE_IDS</code>.</p><p class="help">Connect with Streamable HTTP and an Authorization: Bearer header. Download the guide for tools, environment settings and client examples. These credentials are separate from website delivery keys.</p></div></section>` + `<section class="panel"><div class="panel-body"><h2>Connecting a website?</h2><p class="subtext">Use the REST delivery APIs for published article listings and full article pages. Both integrations are available independently with their own credentials.</p>${btn('nav-api', 'Open REST API documentation')}</div></section>`;
+}
 function integration() {
   const site = data.sites.find(item => item.id === selectedSite);
   const selector = `<section class="panel"><div class="api-site-picker"><div><label for="api-documentation-site">Documentation for website</label><select id="api-documentation-site"><option value="">Select a website…</option>${data.sites.map(item => `<option value="${e(item.id)}" ${item.id === selectedSite ? 'selected' : ''}>${e(item.name)} · ${e(item.url)}</option>`).join('')}</select></div><p class="subtext">Choose a connected website to get its own endpoints, examples and downloadable documentation. Your selection is saved.</p></div></section>`;
-  const title = heading('Delivery API documentation', 'Two APIs for every website: article listing and full article details.');
+  const title = heading('Delivery API documentation', 'REST APIs for your website: article listing and full article details.') + `<section class="panel"><div class="panel-body"><h2>REST API integration</h2><p class="subtext">Use your existing website delivery key and endpoints below. MCP is an additional connection option for AI assistants.</p>${btn('nav-mcp', 'Open MCP connection')}</div></section>`;
   if (!data.sites.length) return title + `<section class="panel">${empty('⤴', 'Add a website first', 'Each website has its own delivery ID and API key.', btn('site', '+ Add website', '', 'primary'))}</section>`;
   if (!site) return title + selector + `<section class="panel">${empty('⤴', 'Choose a website above', 'Listing and detail documentation will use the selected website’s ID. No website is selected automatically.')}</section>`;
   const docs = siteDeliveryDocumentation(site), slug = docs.slug, snippet = (key, label) => `<div class="api-example"><div class="api-example-head"><strong>${label}</strong>${btn('copy-api-snippet', 'Copy', key)}</div><pre>${e(docs.snippets[key])}</pre></div>`;
@@ -321,8 +386,8 @@ function downloadArticle(article, site) {
   document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
 }
 function render() {
-  const pages = [['automation', '▷', 'Automation'], ['overview', '◫', 'Overview'], ['websites', '⌘', 'Websites'], ['topics', '≡', 'Topic queue'], ['review', '▤', 'Article library'], ['calendar', '▦', 'Calendar'], ['activity', '↻', 'Activity'], ['api', '⤴', 'Delivery API']];
-  const views = { automation: automationPage, overview, websites, topics: topicsPage, review: () => heading('Article library', 'Review the evidence, refine the draft, and approve the exact version you read.') + `<section class="panel">${articleTable(filtered(data.articles))}</section>`, calendar, activity: jobsPage, api: integration, article: fullArticleView };
+  const pages = [['automation', '▷', 'Automation'], ['overview', '◫', 'Overview'], ['websites', '⌘', 'Websites'], ['topics', '≡', 'Topic queue'], ['review', '▤', 'Article library'], ['calendar', '▦', 'Calendar'], ['activity', '↻', 'Activity'], ['api', '⤴', 'Delivery API'], ['mcp', '⌘', 'MCP connection']];
+  const views = { automation: automationPage, overview, websites, topics: topicsPage, review: () => heading('Article library', 'Review the evidence, refine the draft, and approve the exact version you read.') + `<section class="panel">${articleTable(filtered(data.articles))}</section>`, calendar, activity: jobsPage, api: integration, mcp: mcpIntegration, article: fullArticleView };
   const pageLabel = page === 'article' ? 'Full article' : pages.find(item => item[0] === page)?.[2];
   app.innerHTML = `<div class="shell"><aside class="sidebar"><div class="brand"><div class="logo">a</div><div>autoblog <span>studio</span></div></div><div class="workspace-label">WORKSPACE</div><div class="workspace-card">${e(data.user.name)}<small>Multi-website publishing</small></div><nav>${pages.map(([id, icon, label]) => `<button data-action="nav-${id}" class="${page === id ? 'active' : ''}"><span class="nav-icon">${icon}</span>${label}${id === 'review' && data.articles.filter(a => a.status === 'draft').length ? `<span class="nav-count">${data.articles.filter(a => a.status === 'draft').length}</span>` : ''}</button>`).join('')}</nav><div class="sidebar-bottom"><div class="local-badge"><span class="dot"></span> Local development · v0.2</div>${btn('logout', 'Sign out', '', 'ghost')}</div></aside><main class="main"><header class="topbar"><div>Workspace &nbsp; / &nbsp; ${e(pageLabel || '')}</div><div class="topbar-right"><select id="site-filter" aria-label="Filter by website"><option value="">All websites</option>${data.sites.map(s => `<option value="${s.id}" ${selectedSite === s.id ? 'selected' : ''}>${e(s.name)}</option>`).join('')}</select><div class="avatar" title="${e(data.user.email)}">${e(data.user.name.slice(0, 2).toUpperCase())}</div></div></header><div class="content ${page === 'article' ? 'reader-layout' : ''}">${views[page]() }<p class="footer-note">AutoBlog Studio · Published articles are available through your delivery API.</p></div></main></div>`;
 }
@@ -392,6 +457,10 @@ document.addEventListener('click', async event => {
     }
     if (action.startsWith('nav-')) { if (action === 'nav-api') await loadDeliveryDocs(); navigatePage(action.slice(4)); return; }
     if (action === 'reload-api-docs') { await loadDeliveryDocs(); render(); return; }
+    if (action === 'download-mcp-guide') {
+      const { guide } = await api('/api/mcp-documentation');
+      downloadApiFile('autoblog-mcp-setup.md', guide, 'text/markdown;charset=utf-8'); return;
+    }
     if (['copy-api-snippet', 'copy-api-guide', 'download-api-guide', 'download-api-openapi'].includes(action)) {
       const site = data.sites.find(item => item.id === selectedSite);
       if (!site) throw new Error('Select a website first.');
@@ -456,6 +525,46 @@ document.addEventListener('click', async event => {
       if (action === 'knowledge-download') return downloadApiFile(`${id}-website-knowledge.md`, markdown, 'text/markdown;charset=utf-8');
       return openDialog('Saved website page', `<pre class="knowledge-markdown">${e(markdown)}</pre><div class="dialog-foot"><button data-action="knowledge-download" data-id="${e(id)}" data-url="${e(url)}">Download page Markdown</button>${btn('knowledge', 'Back to saved pages', id)}${btn('close', 'Close')}</div>`, true);
     }
+    if (action === 'facebook-setup-help') {
+      const help = document.getElementById('facebook-setup-help');
+      const accordion = help.closest('details');
+      help.hidden = accordion.open && !help.hidden;
+      if (!help.hidden) accordion.open = true;
+      button.setAttribute('aria-expanded', String(!help.hidden));
+      return;
+    }
+    if (action === 'linkedin-start') {
+      const { url } = await api(`/api/sites/${id}/social/linkedin/start`, 'POST');
+      location.assign(url);
+      return;
+    }
+    if (action === 'linkedin-disconnect') {
+      await api(`/api/sites/${id}/social/linkedin/disconnect`, 'POST');
+      return await socialDialog(id);
+    }
+    if (action === 'facebook-start') {
+      const { url } = await api(`/api/sites/${id}/social/facebook/start`, 'POST');
+      location.assign(url);
+      return;
+    }
+    if (action === 'facebook-disconnect') {
+      await api(`/api/sites/${id}/social/facebook/disconnect`, 'POST');
+      return await socialDialog(id);
+    }
+    if (action === 'social') return await socialDialog(id);
+    if (action === 'social-accounts') {
+      const { platforms } = await api(`/api/sites/${id}/social/accounts`);
+      return await socialDialog(id, platforms);
+    }
+    if (action === 'social-copy') {
+      const post = modal.socialPosts?.find(item => item.id === id);
+      if (post) { await navigator.clipboard.writeText(post.text); toast('Post text copied.'); }
+      return;
+    }
+    if (action === 'social-post') {
+      const post = modal.socialPosts?.find(item => item.id === id);
+      if (post) return socialPostDialog(modal.dataset.socialSite, post);
+    }
     if (action === 'job') { const { job } = await api(`/api/jobs/${id}`); return openDialog('Generation details', `<pre>${e(JSON.stringify(job, null, 2))}</pre>`, true); }
     if (action === 'approve') {
       if (editingArticle.dirty) throw new Error('Save your changes and review the updated preview before approval.');
@@ -482,6 +591,34 @@ document.addEventListener('submit', async event => {
   try {
     if (form.id === 'auth-form') { await api(`/api/auth/${register ? 'register' : 'login'}`, 'POST', fields); await refresh(); await restoreRoute(typeof location !== 'undefined' && location.pathname === '/'); startPolling(); return; }
     if (form.id === 'automation-form') { await api(`/api/sites/${form.dataset.id}/automation`, 'POST', { enabled: true, mode: fields.mode, themes: fields.themes.split('\n') }); modal.close(); await refresh(); return toast('Automation saved. The status card will show the next step.'); }
+    if (form.id === 'linkedin-settings-form') {
+      await api(`/api/sites/${form.dataset.id}/social/linkedin/settings`, 'PUT', { clientId: fields.clientId.trim(), clientSecret: fields.clientSecret.trim() });
+      form.reset();
+      await socialDialog(form.dataset.id);
+      return toast('LinkedIn app settings saved.');
+    }
+    if (form.id === 'facebook-settings-form') {
+      await api(`/api/sites/${form.dataset.id}/social/facebook/settings`, 'PUT', { appId: fields.appId.trim(), appSecret: fields.appSecret.trim() });
+      form.reset();
+      await socialDialog(form.dataset.id);
+      return toast('Meta app settings saved.');
+    }
+    if (form.id === 'facebook-page-form') {
+      await api(`/api/sites/${form.dataset.id}/social/facebook/connect`, 'POST', { pageId: fields.pageId });
+      await socialDialog(form.dataset.id);
+      return toast('Facebook Page connected. Enable automatic publishing in Social publishing.');
+    }
+    if (form.id === 'social-form') {
+      const platforms = new FormData(form).getAll('platform');
+      await api(`/api/sites/${form.dataset.id}/social`, 'PUT', { ...fields, platforms, enabled: fields.enabled === 'on' });
+      await socialDialog(form.dataset.id);
+      return toast('Social settings saved.');
+    }
+    if (form.id === 'social-post-form') {
+      await api(`/api/sites/${form.dataset.site}/social/posts/${form.dataset.id}`, 'PUT', { ...fields, queue: fields.queue === 'on' });
+      await socialDialog(form.dataset.site);
+      return toast('Social post saved.');
+    }
     if (form.id === 'site-form') {
       const approvedLinks = fields.approvedLinks.split('\n').filter(l => l.trim()).map(line => { const [url, title, type] = line.split('|').map(s => s.trim()); return { url, title: title || url, service: type === 'service' }; });
       const payload = { ...fields, monthlyVolume: Number(fields.monthlyVolume), monthlyBudget: Number(fields.monthlyBudget), jobBudget: Number(fields.jobBudget), reviewCapacity: Number(fields.reviewCapacity), inlineImageCount: Number(fields.inlineImageCount), approvedLinks, autoGenerateImages: fields.autoGenerateImages === 'on', generationPaused: fields.generationPaused === 'on', publicationPaused: fields.publicationPaused === 'on' };
@@ -498,5 +635,18 @@ document.addEventListener('submit', async event => {
     else errorInDialog(error);
   } finally { if (button) button.disabled = false; }
 });
+
+async function handleFacebookReturn(facebookResult) {
+  if (facebookResult && selectedSite) {
+    try {
+      if (facebookResult === 'failed') throw new Error('Facebook sign-in did not complete. Try connecting again.');
+      if (facebookResult === 'choose') {
+        const { pages } = await api(`/api/sites/${selectedSite}/social/facebook/pages`);
+        openDialog('Choose a Facebook Page', pages.length ? `<form id="facebook-page-form" data-id="${e(selectedSite)}"><label for="facebook-page">Page</label><select name="pageId" id="facebook-page" required><option value="">Select a Page</option>${pages.map(page => `<option value="${e(page.id)}">${e(page.name)}</option>`).join('')}</select><div class="dialog-foot"><button class="primary" type="submit">Connect Page</button></div></form>` : '<p>Facebook returned no Pages with publishing access. Check your Page role and granted permissions.</p>');
+      }
+    } catch (error) { openDialog('Facebook connection', `<p>${e(error.message)}</p>`); }
+  }
+}
+
 if (typeof window !== 'undefined') window.addEventListener('popstate', () => { if (data) restoreRoute().catch(error => toast(error.message)); });
 try { await refresh(); await restoreRoute(typeof location !== 'undefined' && location.pathname === '/'); startPolling(); } catch { authScreen(); }

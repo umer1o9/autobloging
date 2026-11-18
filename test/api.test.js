@@ -9,7 +9,7 @@ test('REST API: auth, tenant isolation, revision workflow, publication, key rota
   const app = await createApp({ database: db.url, origin: 'http://localhost', workers: false, provider: { ready: false, models: {} } });
   await new Promise(r => app.server.listen(0, '127.0.0.1', r)); t.after(async () => { await app.close(); await db.cleanup(); });
   const origin = `http://127.0.0.1:${app.server.address().port}`;
-  for (const path of ['/automation', '/overview', '/websites', '/topics', '/articles', '/calendar', '/activity', '/delivery-api', '/articles/example-id']) {
+  for (const path of ['/automation', '/overview', '/websites', '/topics', '/articles', '/calendar', '/activity', '/delivery-api', '/mcp-connection', '/articles/example-id']) {
     const routed = await fetch(origin + path);
     assert.equal(routed.status, 200);
     assert.match(routed.headers.get('content-type'), /text\/html/);
@@ -33,6 +33,25 @@ test('REST API: auth, tenant isolation, revision workflow, publication, key rota
   assert.ok(!JSON.stringify(first.body).includes('password'));
   const second = await call('/api/auth/register', { method: 'POST', input: { email: 'b@example.com', password: 'another-test-password', name: 'Workspace B' } });
   const site = (await call('/api/sites', { cookie: first.cookie, method: 'POST', input: website() })).body.site;
+  const socialPath = `/api/sites/${site.id}/social`;
+  assert.equal((await call(socialPath)).status, 401);
+  assert.equal((await call(socialPath, { cookie: second.cookie })).status, 404);
+  const facebookSettings = { appId: '123456', appSecret: 'f'.repeat(32) };
+  const facebookPath = socialPath + '/facebook/settings';
+  assert.equal((await call(facebookPath, { method: 'PUT', cookie: second.cookie, input: facebookSettings })).status, 404);
+  assert.equal((await call(facebookPath, { method: 'PUT', cookie: first.cookie, input: facebookSettings })).status, 200);
+  const socialView = await call(socialPath, { cookie: first.cookie });
+  assert.equal(socialView.body.facebookAppId, facebookSettings.appId);
+  assert.equal(socialView.body.facebookLoginReady, false);
+  assert.ok(!JSON.stringify(socialView.body).includes(facebookSettings.appSecret));
+  const overview = await call('/api/dashboard', { cookie: first.cookie });
+  assert.ok(!JSON.stringify(overview.body).includes(facebookSettings.appSecret));
+  const socialSettings = { platforms: ['facebook'], path: '/blog/{slug}', enabled: false };
+  assert.equal((await call(socialPath, { method: 'PUT', cookie: second.cookie, input: socialSettings })).status, 404);
+  const savedSocial = await call(socialPath, { method: 'PUT', cookie: first.cookie, input: socialSettings });
+  assert.equal(savedSocial.status, 200);
+  assert.deepEqual(savedSocial.body.settings.platforms, ['facebook']);
+  assert.equal(savedSocial.body.settings.enabled, false);
   assert.equal((await call(`/api/sites/${site.id}/key`, { cookie: second.cookie, method: 'POST', input: {} })).status, 404);
   assert.equal((await call(`/api/sites/${site.id}/knowledge`, { cookie: second.cookie })).status, 404);
   assert.equal((await call(`/api/sites/${site.id}/knowledge/sync`, { cookie: second.cookie, method: 'POST', input: {} })).status, 404);

@@ -1,0 +1,116 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { mcpConfiguration } from '../src/mcp.js';
+import { createApp } from '../src/server.js';
+import { testDatabase } from './mysql-helper.js';
+import { website, validArticle } from './helpers.js';
+
+test('MCP credentials fail closed for missing, short, identical or invalid scopes', () => {
+  const base = { MCP_USER_ID: randomUUID(), MCP_READ_TOKEN: 'r'.repeat(64), MCP_MANAGE_TOKEN: 'm'.repeat(64) };
+  assert.equal(mcpConfiguration(base).valid, true);
+  for (const overrides of [{ MCP_USER_ID: '' }, { MCP_READ_TOKEN: 'short' }, { MCP_MANAGE_TOKEN: base.MCP_READ_TOKEN }, { MCP_SITE_IDS: 'not-a-uuid' }, { MCP_READ_TOKEN: '', MCP_MANAGE_TOKEN: '' }, { MCP_READ_TOKEN: ' '.repeat(64) }]) {
+    assert.equal(mcpConfiguration({ ...base, ...overrides }).valid, false);
+  }
+  assert.equal(mcpConfiguration({ ...base, MCP_READ_TOKEN: '' }).valid, true);
+});
+
+test('MCP official client: authentication, read/manage isolation, tenant scopes, queues and publication', async t => {
+  const db = await testDatabase(t, false);
+  const user = { id: randomUUID(), workspace: randomUUID(), name: 'MCP test', email: 'mcp@example.com', password: 'unused-test-hash' };
+  await db.store.createUser(user);
+  const other = { ...user, id: randomUUID(), workspace: randomUUID(), email: 'other@example.com' };
+  await db.store.createUser(other);
+  const config = mcpConfiguration({ MCP_USER_ID: user.id, MCP_READ_TOKEN: 'r'.repeat(64), MCP_MANAGE_TOKEN: 'm'.repeat(64) });
+  const app = await createApp({ database: db.url, origin: 'http://localhost', workers: false, provider: { ready: true, models: { writing: 'test', research: 'test' } }, mcpConfig: config });
+  await new Promise(r => app.server.listen(0, '127.0.0.1', r));
+  const endpoint = new URL(`http://127.0.0.1:${app.server.address().port}/mcp`);
+  const clients = [];
+  t.after(async () => { for (const client of clients) await client.close(); await app.close(); await db.cleanup(); });
+  async function connect(token) {
+    const client = new Client({ name: 'autoblog-integration-test', version: '1.0.0' });
+    clients.push(client);
+    await client.connect(new StreamableHTTPClientTransport(endpoint, { requestInit: { headers: { Authorization: `Bearer ${token}` } } }));
+    return client;
+  }
+  async function call(client, name, args = {}) {
+    const response = await client.callTool({ name, arguments: args });
+    return { error: !!response.isError, body: JSON.parse(response.content[0].text) };
+  }
+  assert.equal((await fetch(endpoint)).status, 401);
+  assert.equal((await fetch(new URL('/api/mcp-documentation', endpoint))).status, 401);
+  const sessionToken = 'isolated-mcp-docs-session';
+  const { hash } = await import('../src/domain.js');
+  await app.store.createSession(hash(sessionToken), user.id, Date.now() + 60000);
+  const documentation = await fetch(new URL('/api/mcp-documentation', endpoint), { headers: { cookie: `ab_session=${sessionToken}` } });
+  const guide = (await documentation.json()).guide;
+  assert.equal(documentation.status, 200);
+  assert.match(guide, /MCP_MANAGE_TOKEN/);
+  assert.ok(!guide.includes(config.manage));
+  assert.equal((await fetch(endpoint, { method: 'POST', headers: { authorization: 'Bearer wrong' } })).status, 401);
+  assert.equal((await fetch(endpoint, { method: 'POST', headers: { authorization: `Bearer ${config.manage}`, origin: 'https://attacker.example' } })).status, 403);
+  assert.equal((await fetch(endpoint, { headers: { authorization: `Bearer ${config.read}` } })).status, 405);
+  const site = await app.domain.saveSite(user.workspace, website());
+  const excluded = await app.domain.saveSite(user.workspace, website({ name: 'Second site' }));
+  const foreign = await app.domain.saveSite(other.workspace, website({ name: 'Foreign site' }));
+  const topic = await app.domain.createTopic(user.workspace, site.id, { title: 'MCP reviewed publication workflow' });
+  const article = await app.domain.createDraft(user.workspace, topic.id);
+  const saved = await app.domain.saveArticle(user.workspace, article.id, { revision: 1, content: validArticle() });
+  const revision = saved.revision;
+  const foreignTopic = await app.domain.createTopic(other.workspace, foreign.id, { title: 'Foreign topic' });
+  const foreignArticle = await app.domain.createDraft(other.workspace, foreignTopic.id);
+  const read = await connect(config.read), manage = await connect(config.manage);
+  const readTools = (await read.listTools()).tools.map(tool => tool.name);
+  const managementTools = (await manage.listTools()).tools.map(tool => tool.name);
+  assert.ok(readTools.includes('get_article'));
+  assert.ok(!readTools.includes('generate_article'));
+  assert.ok(managementTools.includes('publish_article'));
+  assert.ok(managementTools.includes('unpublish_article'));
+  const denied = await read.callTool({ name: 'unpublish_article', arguments: { articleId: article.id, revision } });
+  assert.equal(denied.isError, true);
+  assert.equal((await manage.callTool({ name: 'get_article', arguments: { articleId: 'invalid-id' } })).isError, true);
+  assert.equal((await call(read, 'list_websites')).body.websites.length, 2);
+  assert.equal((await call(read, 'list_articles', { limit: 1 })).body.total, 1);
+  assert.equal((await call(read, 'get_article', { articleId: article.id })).body.article.status, 'draft');
+  assert.equal((await call(manage, 'get_article', { articleId: foreignArticle.id })).body.status, 404);
+  assert.equal((await call(manage, 'resync_website', { siteId: foreign.id })).body.status, 404);
+  assert.equal((await call(manage, 'publish_article', { articleId: article.id, revision })).error, true);
+  assert.equal((await call(manage, 'approve_article', { articleId: article.id, revision: revision - 1, evidenceReviewed: true })).body.status, 409);
+  assert.equal((await call(manage, 'approve_article', { articleId: article.id, revision, evidenceReviewed: true })).error, false);
+  await app.store.transaction(async () => { const current = await app.domain.need('site', user.workspace, site.id); current.publicationPaused = true; await app.store.put('site', user.workspace, site.id, current); }, user.workspace);
+  assert.equal((await call(manage, 'publish_article', { articleId: article.id, revision })).body.status, 409);
+  await app.store.transaction(async () => { const current = await app.domain.need('site', user.workspace, site.id); current.publicationPaused = false; await app.store.put('site', user.workspace, site.id, current); }, user.workspace);
+  assert.equal((await call(manage, 'schedule_article', { articleId: article.id, revision, scheduledAt: new Date(Date.now() + 600000).toISOString() })).body.article.status, 'scheduled');
+  assert.equal((await call(manage, 'publish_article', { articleId: article.id, revision })).body.article.status, 'published');
+  const { key } = await app.domain.rotateKey(user.workspace, site.id);
+  assert.equal((await app.domain.delivered(site.id, key)).total, 1);
+  assert.equal((await call(manage, 'unpublish_article', { articleId: article.id, revision })).body.article.status, 'draft');
+  assert.equal((await call(manage, 'reject_article', { articleId: article.id, revision, reason: 'Synthetic review decision' })).body.article.status, 'rejected');
+  assert.equal((await app.domain.delivered(site.id, key)).total, 0);
+  const websitesOutput = JSON.stringify((await call(read, 'list_websites')).body);
+  assert.ok(!websitesOutput.includes('apiKeyHash'));
+  assert.ok(!websitesOutput.includes(key));
+  assert.equal((await call(manage, 'resync_website', { siteId: site.id })).body.knowledge.status, 'queued');
+  assert.equal((await call(read, 'get_website_knowledge', { siteId: site.id })).error, false);
+  assert.equal((await call(read, 'search_website_knowledge', { siteId: site.id, query: 'workflow' })).error, false);
+  const generationTopic = await app.domain.createTopic(user.workspace, site.id, { title: 'Queued MCP test article' });
+  assert.equal((await call(manage, 'set_generation_paused', { siteId: site.id, paused: true })).body.site.generationPaused, true);
+  assert.equal((await call(manage, 'generate_article', { siteId: site.id, topicId: generationTopic.id })).error, true);
+  await call(manage, 'set_generation_paused', { siteId: site.id, paused: false });
+  const queued = await call(manage, 'generate_article', { siteId: site.id, topicId: generationTopic.id });
+  assert.equal(queued.error, false); assert.equal(queued.body.status, 'queued');
+  assert.equal((await call(read, 'get_job', { jobId: queued.body.jobId })).body.job.attempts, 0);
+  assert.equal((await call(read, 'list_jobs', { siteId: site.id })).body.total, 1);
+  assert.equal((await call(read, 'list_topics', { siteId: site.id })).body.total, 2);
+  const audits = await app.store.query("SELECT action FROM audit_events WHERE action LIKE 'mcp.%'");
+  assert.ok(audits.some(row => row.action === 'mcp.generate_article'));
+  assert.ok(audits.some(row => row.action === 'mcp.publish_article'));
+  config.siteIds = [site.id];
+  assert.equal((await call(read, 'list_websites')).body.websites.length, 1);
+  assert.equal((await call(manage, 'resync_website', { siteId: excluded.id })).body.status, 404);
+  assert.equal((await call(manage, 'generate_article', { siteId: site.id, topicId: foreignTopic.id })).body.status, 404);
+  config.valid = false;
+  assert.equal((await fetch(endpoint, { method: 'POST', headers: { authorization: `Bearer ${config.read}` } })).status, 503);
+});

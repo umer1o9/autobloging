@@ -1,5 +1,8 @@
+import { linkedinLogin, linkedinConnection } from './linkedin.js';
+import { facebookLogin, facebookAppEnvironment } from './facebook-login.js';
 import http from 'node:http';
 import { startServer } from './startup.js';
+import { createMcpEndpoint } from './mcp.js';
 import { knowledgeSummary } from './website-knowledge.js';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -29,10 +32,11 @@ function allowedAdminOrigins(origin) {
   return allowed;
 }
 
-export async function createApp({ database = process.env.DATABASE_URL, origin = process.env.APP_ORIGIN || 'http://127.0.0.1:3210', provider = createProvider(), imageProvider = createImageProvider(), workers = process.env.WORKER_MODE !== 'cron', migrate = false, migrationDatabase = process.env.MIGRATION_DATABASE_URL, httpServer, reportStartup = () => {} } = {}) {
+export async function createApp({ database = process.env.DATABASE_URL, origin = process.env.APP_ORIGIN || 'http://127.0.0.1:3210', provider = createProvider(), imageProvider = createImageProvider(), workers = process.env.WORKER_MODE !== 'cron', migrate = false, migrationDatabase = process.env.MIGRATION_DATABASE_URL, httpServer, reportStartup = () => {}, mcpConfig } = {}) {
   const store = new Store(database);
   try { await store.prepareSchema({ migrate, migrationDatabase, onPhase: reportStartup }); } catch (error) { await store.close(); throw error; }
   const domain = new Domain(store, provider, imageProvider), throttle = new Map(), adminOrigins = allowedAdminOrigins(origin);
+  const mcpEndpoint = createMcpEndpoint({ store, domain, origins: adminOrigins, config: mcpConfig });
   const imageOrigins = [...adminOrigins].join(' ');
   const send = (res, status, value, headers = {}) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...headers }); res.end(JSON.stringify(value)); };
   async function body(req) {
@@ -49,6 +53,16 @@ export async function createApp({ database = process.env.DATABASE_URL, origin = 
     return user;
   }
   const cookie = value => `ab_session=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${value ? 604800 : 0}${origin.startsWith('https:') ? '; Secure' : ''}`;
+  const facebookFor = site => facebookLogin(origin, facebookAppEnvironment(site?.facebookApp));
+  const readFacebookFlow = req => {
+    const [workspace, siteId, token] = (readCookie(req, 'ab_facebook') || '').split('.');
+    return { workspace, siteId, token };
+  };
+  const saveFacebookFlow = (facebook, workspace, siteId, flow) => flowCookie([workspace, siteId, facebook.seal(flow)].join('.'));
+  const readCookie = (req, name) => req.headers.cookie?.split(';').map(value => value.trim()).find(value => value.startsWith(name + '='))?.slice(name.length + 1);
+  const flowCookie = value => `ab_facebook=${value}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${value ? 600 : 0}`;
+  const linkedinCookie = value => `ab_linkedin=${value}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${value ? 600 : 0}`;
+  const sessionBinding = req => hash(readCookie(req, 'ab_session') || '');
   reportStartup('Preparing HTTP routes');
   const handle = async (req, res) => {
     const requestId = randomUUID();
@@ -66,6 +80,56 @@ export async function createApp({ database = process.env.DATABASE_URL, origin = 
     res.setHeader('content-security-policy', `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: ${imageOrigins}; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`);
     try {
       const url = new URL(req.url, origin), path = url.pathname, method = req.method;
+      if (path === '/linkedin/callback' && method === 'GET') {
+        const [workspace, siteId, sealed] = (readCookie(req, 'ab_linkedin') || '').split('.');
+        const site = workspace && siteId && await store.get('site', workspace, siteId);
+        const login = linkedinLogin(origin, site?.linkedinApp);
+        const flow = login.open(sealed);
+        if (!flow || flow.siteId !== siteId || flow.workspace !== workspace || flow.expires <= Date.now() ||
+            flow.state !== url.searchParams.get('state') || (await store.sessionUser(flow.binding, Date.now()))?.workspace !== workspace) {
+          throw new AppError(400, 'LinkedIn sign-in expired. Start again from Social publishing.');
+        }
+        let status = 'failed';
+        try {
+          const code = url.searchParams.get('code');
+          if (!code) throw new Error('Missing authorization code.');
+          const account = await login.exchange(code);
+          await store.transaction(async () => {
+            const current = await domain.need('site', workspace, siteId);
+            if (JSON.stringify(current.linkedinApp) !== JSON.stringify(site.linkedinApp) || !(await store.sessionUser(flow.binding, Date.now()))) throw new Error('LinkedIn setup changed.');
+            current.linkedinConnection = login.seal(account);
+            if (current.social) current.social.enabled = false;
+            await store.put('site', workspace, siteId, current);
+            await store.audit(workspace, siteId, 'social.linkedin_connected', siteId);
+          }, workspace);
+          status = 'connected';
+        } catch { /* Give the user a safe error without exposing provider credentials. */ }
+        res.writeHead(303, { location: `/websites?site=${encodeURIComponent(siteId)}&linkedin=${status}`, 'set-cookie': linkedinCookie(''), 'cache-control': 'no-store' });
+        return res.end();
+      }
+      if (path === '/facebook/callback' && method === 'GET') {
+        const { workspace, siteId, token: sealed } = readFacebookFlow(req);
+        const site = workspace && siteId && await store.get('site', workspace, siteId);
+        const facebook = facebookFor(site);
+        const flow = site && facebook.open(sealed);
+        if (flow?.stage !== 'authorize' || flow.expires <= Date.now() || flow.state !== url.searchParams.get('state') || flow.siteId !== siteId || flow.workspace !== workspace || (await store.sessionUser(flow.binding, Date.now()))?.workspace !== workspace) {
+          throw new AppError(400, 'Facebook sign-in expired. Start again from Social publishing.');
+        }
+        try {
+          const code = url.searchParams.get('code');
+          if (!code) throw new Error();
+          const token = await facebook.exchange(code);
+          if (!token) throw new Error();
+          const next = [workspace, siteId, facebook.seal({ ...flow, stage: 'choose', token })].join('.');
+          if (next.length > 3600) throw new Error();
+          res.writeHead(303, { location: `/websites?site=${encodeURIComponent(flow.siteId)}&facebook=choose`, 'set-cookie': flowCookie(next), 'cache-control': 'no-store' });
+          return res.end();
+        } catch {
+          res.writeHead(303, { location: `/websites?site=${encodeURIComponent(flow.siteId)}&facebook=failed`, 'set-cookie': flowCookie(''), 'cache-control': 'no-store' });
+          return res.end();
+        }
+      }
+      if (path === '/mcp') return await mcpEndpoint(req, res);
       if (!['GET', 'HEAD'].includes(method)) {
         if (req.headers.origin && !adminOrigins.has(req.headers.origin)) throw new AppError(403, 'Cross-origin administration is not allowed.');
         if (req.headers['x-autoblog-client'] !== 'admin') throw new AppError(403, 'Admin request header required.');
@@ -121,6 +185,7 @@ export async function createApp({ database = process.env.DATABASE_URL, origin = 
             openapi: JSON.parse(readFileSync(new URL('../docs/DELIVERY_API.openapi.json', import.meta.url), 'utf8'))
           });
         }
+        if (path === '/api/mcp-documentation' && method === 'GET') return send(res, 200, { guide: readFileSync(new URL('../docs/MCP.md', import.meta.url), 'utf8') });
         if (path === '/api/auth/me' && method === 'GET') return send(res, 200, { user });
         if (path === '/api/auth/logout' && method === 'POST') {
           const token = req.headers.cookie?.split(';').map(s => s.trim()).find(s => s.startsWith('ab_session='))?.slice(11);
@@ -134,6 +199,119 @@ export async function createApp({ database = process.env.DATABASE_URL, origin = 
         }
         if (path === '/api/sites' && method === 'POST') return send(res, 201, { site: await domain.saveSite(workspace, await body(req)) });
         let match;
+        if ((match = path.match(/^\/api\/sites\/([^/]+)\/social\/linkedin\/(settings|start|disconnect)$/))) {
+          const site = await domain.need('site', workspace, match[1]);
+          const action = match[2];
+          if (method === 'POST' && action === 'start') {
+            const login = linkedinLogin(origin, site.linkedinApp);
+            if (!login.configured) throw new AppError(409, 'Save LinkedIn app credentials and open AutoBlog Studio on HTTPS first.');
+            const state = randomBytes(32).toString('hex');
+            const flow = { state, expires: Date.now() + 600000, binding: sessionBinding(req), workspace, siteId: site.id };
+            return send(res, 200, { url: login.authorize(state) }, { 'set-cookie': linkedinCookie([workspace, site.id, login.seal(flow)].join('.')) });
+          }
+          const setup = method === 'PUT' && action === 'settings';
+          if (!setup && !(method === 'POST' && action === 'disconnect')) throw new AppError(405, 'Method not allowed.');
+          let app;
+          if (setup) {
+            const configuredOrigin = new URL(origin);
+            if (configuredOrigin.protocol !== 'https:' && !['localhost', '127.0.0.1', '[::1]'].includes(configuredOrigin.hostname)) throw new AppError(403, 'Use HTTPS to save LinkedIn app settings.');
+            const { clientId, clientSecret } = await body(req);
+            if (typeof clientId !== 'string' || !/^[a-zA-Z0-9_-]{4,128}$/.test(clientId) ||
+                typeof clientSecret !== 'string' || !/^\S{6,256}$/.test(clientSecret)) throw new AppError(400, 'Enter a valid LinkedIn Client ID and Client Secret.');
+            app = { id: clientId, secret: clientSecret, origin };
+          }
+          await store.transaction(async () => {
+            const current = await domain.need('site', workspace, site.id);
+            if (setup && JSON.stringify(current.linkedinApp) === JSON.stringify(app)) return;
+            if (setup) current.linkedinApp = app;
+            delete current.linkedinConnection;
+            if (current.social) current.social.enabled = false;
+            await store.put('site', workspace, site.id, current);
+            await store.audit(workspace, site.id, setup ? 'social.linkedin_app_configured' : 'social.linkedin_disconnected', site.id);
+          }, workspace);
+          return send(res, 200, { ok: true }, { 'set-cookie': linkedinCookie('') });
+        }
+        if ((match = path.match(new RegExp('^/api/sites/([^/]+)/social/facebook/(settings|start|pages|connect|disconnect)$')))) {
+          const site = await domain.need('site', workspace, match[1]);
+          const action = match[2];
+          if (method === 'PUT' && action === 'settings') {
+            const configuredOrigin = new URL(origin);
+            if (configuredOrigin.protocol !== 'https:' && !['localhost', '127.0.0.1', '[::1]'].includes(configuredOrigin.hostname)) {
+              throw new AppError(403, 'Use HTTPS when saving Meta app settings.');
+            }
+            const { appId, appSecret } = await body(req);
+            if (typeof appId !== 'string' || !/^\d{1,32}$/.test(appId) ||
+                typeof appSecret !== 'string' || !/^[a-fA-F0-9]{32}$/.test(appSecret)) {
+              throw new AppError(400, 'Enter a numeric Meta App ID and the 32-character Meta App Secret.');
+            }
+            await store.transaction(async () => {
+              const current = await domain.need('site', workspace, site.id);
+              if (current.facebookApp?.id === appId && current.facebookApp.secret === appSecret && current.facebookApp.origin === origin) return;
+              current.facebookApp = { id: appId, secret: appSecret, origin };
+              delete current.facebookConnection;
+              if (current.social) current.social.enabled = false;
+              await store.put('site', workspace, site.id, current);
+              await store.audit(workspace, site.id, 'social.facebook_app_configured', site.id);
+            }, workspace);
+            return send(res, 200, { ok: true }, { 'set-cookie': flowCookie('') });
+          }
+          const facebook = facebookFor(site);
+          if (method === 'POST' && action === 'disconnect') {
+            await store.transaction(async () => {
+              const current = await domain.need('site', workspace, site.id);
+              delete current.facebookConnection;
+              if (current.social) current.social.enabled = false;
+              await store.put('site', workspace, site.id, current);
+            }, workspace);
+            return send(res, 200, { ok: true });
+          }
+          if (!facebook.configured) throw new AppError(409, 'Configure Facebook App ID, App Secret and the HTTPS app origin first.');
+          if (method === 'POST' && action === 'start') {
+            const state = randomBytes(32).toString('hex');
+            const flow = { stage: 'authorize', state, expires: Date.now() + 600000, binding: sessionBinding(req), workspace, siteId: site.id };
+            return send(res, 200, { url: facebook.authorize(state) }, { 'set-cookie': saveFacebookFlow(facebook, workspace, site.id, flow) });
+          }
+          const flow = facebook.open(readFacebookFlow(req).token);
+          if (flow?.stage !== 'choose' || flow.expires <= Date.now() || flow.binding !== sessionBinding(req) || flow.siteId !== site.id || flow.workspace !== workspace) {
+            throw new AppError(403, 'Facebook sign-in expired. Start again from Social publishing.');
+          }
+          let pages;
+          try { pages = await facebook.pages(flow.token); }
+          catch { throw new AppError(502, 'Could not load authorized Pages. Check Meta permissions and sign in again.'); }
+          if (method === 'GET' && action === 'pages') return send(res, 200, { pages: pages.map(({ id, name }) => ({ id, name })) });
+          if (method === 'POST' && action === 'connect') {
+            const input = await body(req);
+            const page = pages.find(item => item.id === input.pageId);
+            if (!page) throw new AppError(400, 'Select a Page authorized for publishing.');
+            await store.transaction(async () => {
+              const current = await domain.need('site', workspace, site.id);
+              if (JSON.stringify(current.facebookApp) !== JSON.stringify(site.facebookApp)) throw new AppError(409, 'Facebook app settings changed. Sign in again.');
+              current.facebookConnection = facebook.seal({ pageId: page.id, accessToken: page.access_token });
+              if (current.social) current.social.enabled = false;
+              await store.put('site', workspace, site.id, current);
+              await store.audit(workspace, site.id, 'social.facebook_connected', site.id);
+            }, workspace);
+            return send(res, 200, { ok: true }, { 'set-cookie': flowCookie('') });
+          }
+          throw new AppError(405, 'Method not allowed.');
+        }
+
+        if ((match = path.match(/^\/api\/sites\/([^/]+)\/social(?:\/(accounts|posts\/([a-f0-9-]+)))?$/))) {
+          const site = await domain.need('site', workspace, match[1]);
+          if (!match[2] && method === 'GET') return send(res, 200, { ...await domain.social.view(workspace, site), facebookLoginReady: facebookFor(site).configured, facebookAppId: site.facebookApp?.id || '', facebookCallback: new URL('/facebook/callback', origin).href, facebookLinked: !!site.facebookConnection, linkedinClientId: site.linkedinApp?.id || '',
+            linkedinLoginReady: linkedinLogin(origin, site.linkedinApp).configured, linkedinCallback: new URL('/linkedin/callback', origin).href,
+            linkedinLinked: !!site.linkedinConnection, linkedinMember: linkedinConnection(site)?.name || '', linkedinActive: !!linkedinConnection(site) });
+          if (!match[2] && method === 'PUT') {
+            await domain.social.configure(workspace, site, await body(req));
+            return send(res, 200, await domain.social.view(workspace, await domain.need('site', workspace, site.id)));
+          }
+          if (match[2] === 'accounts' && method === 'GET') return send(res, 200, { platforms: await domain.social.connectedAccounts(site) });
+          if (match[3] && method === 'PUT') {
+            await domain.social.edit(workspace, site.id, match[3], await body(req));
+            return send(res, 200, { ok: true });
+          }
+          throw new AppError(405, 'Method not allowed.');
+        }
         if ((match = path.match(/^\/api\/sites\/([^/]+)\/knowledge(?:\/(sync|document|search))?$/))) {
           await domain.need('site', workspace, match[1]);
           if (method === 'POST' && match[2] === 'sync') return send(res, 202, { knowledge: await domain.queueWebsiteSync(workspace, match[1]) });
@@ -168,7 +346,7 @@ export async function createApp({ database = process.env.DATABASE_URL, origin = 
         throw new AppError(404, 'Endpoint not found.');
       }
       const files = { '/article.css': ['article.css', 'text/css'], '/app.js': ['app.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'] };
-      const appRoutes = new Set(['/', ...Object.values({ automation: '/automation', overview: '/overview', sites: '/websites', topics: '/topics', review: '/articles', calendar: '/calendar', jobs: '/activity', api: '/delivery-api' })]);
+      const appRoutes = new Set(['/', ...Object.values({ automation: '/automation', overview: '/overview', sites: '/websites', topics: '/topics', review: '/articles', calendar: '/calendar', jobs: '/activity', api: '/delivery-api', mcp: '/mcp-connection' })]);
       const file = files[path] || (appRoutes.has(path) || /^\/articles\/[^/]+$/.test(path) ? ['index.html', 'text/html'] : null);
       if (method !== 'GET' || !file) throw new AppError(404, 'Not found.');
       res.writeHead(200, { 'content-type': `${file[1]}; charset=utf-8`, 'cache-control': 'no-store' });
@@ -192,6 +370,7 @@ export async function createApp({ database = process.env.DATABASE_URL, origin = 
         await domain.syncWebsites(message => console.log(message));
         await domain.automate();
         await domain.publishDue();
+        await domain.social.run();
         await store.cleanSessions();
         for (const [key, value] of throttle) if (Date.now() - value.at > 900000) throttle.delete(key);
         const queued = await store.queuedJobs(Math.max(0, 2 - domain.running.size));

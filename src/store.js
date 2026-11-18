@@ -25,7 +25,7 @@ export class Store {
       const [[lock]] = await connection.execute('SELECT GET_LOCK(?, 30) AS acquired', [name]);
       if (!lock.acquired) throw new Error('Another schema migration is running.');
       await connection.query('CREATE TABLE IF NOT EXISTS schema_migrations (version INT PRIMARY KEY, applied_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)) ENGINE=InnoDB');
-      for (const [version, file] of [[1, '001_initial.sql'], [2, '002_website_knowledge.sql']]) {
+      for (const [version, file] of [[1, '001_initial.sql'], [2, '002_website_knowledge.sql'], [3, '003_social_posts.sql']]) {
         const [applied] = await connection.execute('SELECT version FROM schema_migrations WHERE version=?', [version]);
         if (!applied.length) {
           const sql = await readFile(new URL(`../migrations/${file}`, import.meta.url), 'utf8');
@@ -36,8 +36,8 @@ export class Store {
     } finally { await connection.execute('SELECT RELEASE_LOCK(?)', [name]).catch(() => {}); connection.release(); }
   }
   async assertSchema() {
-    const rows = await this.query('SELECT version FROM schema_migrations WHERE version=2');
-    if (!rows.length) throw Object.assign(new Error('Run npm run db:migrate before starting the application.'), { code: 'SCHEMA_MIGRATION_REQUIRED' });
+    const rows = await this.query('SELECT version FROM schema_migrations WHERE version IN (2,3)');
+    if (rows.length !== 2) throw Object.assign(new Error('Run npm run db:migrate before starting the application.'), { code: 'SCHEMA_MIGRATION_REQUIRED' });
   }
   async prepareSchema({ migrate = false, migrationDatabase, log = console.log, onPhase = () => {} } = {}) {
     onPhase('Checking database schema');

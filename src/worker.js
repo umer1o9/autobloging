@@ -29,6 +29,7 @@ export async function runWorkerOnce(store, domain, log = console.log) {
   // that are not due yet will be picked up by the next cron invocation.
   await domain.automate();
   await domain.publishDue();
+  await time('social publishing', () => domain.social.run());
   log(`Queue pass finished; processed ${processed} job(s).`);
   return { skipped: false, processed };
 }

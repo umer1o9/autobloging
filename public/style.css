@@ -17,3 +17,33 @@ fieldset{border:0;padding:0;margin:0;min-width:0}details{margin:18px 0;border:1p
 .knowledge-panel .panel-body>p{margin-top:0}.knowledge-search{padding:20px 0}.knowledge-search input{margin-bottom:10px}.knowledge-search pre,.knowledge-markdown{white-space:pre-wrap;overflow-wrap:anywhere;max-height:65vh;overflow:auto;font-size:12px;line-height:1.7}.knowledge-search section{margin:14px 0;padding:16px;border:1px solid var(--border);border-radius:10px}.knowledge-panel .error{margin-top:12px}
 
 .knowledge-warning{padding:12px;border-radius:8px;background:#fff8e8;color:#76551b;font-size:13px}.knowledge-panel .badge.partial{background:#fff3d8;color:#76551b}
+
+.meta-setup {
+  position: relative;
+  margin: 18px 0;
+  padding: 14px;
+  background: #f0f7f3;
+  border: 1px solid #d4e5dc;
+  border-radius: 8px;
+}
+.meta-setup details { margin: 0; padding: 0; border: 0; }
+.meta-setup summary { padding-right: 44px; min-height: 28px; }
+.meta-setup .meta-setup-info {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  width: 32px;
+  min-height: 32px;
+  padding: 0;
+  border-radius: 50%;
+  color: #145d49;
+  background: #fff;
+  font-weight: 700;
+}
+.meta-setup .meta-setup-info:hover { background: #dceee4; }
+.meta-setup-info:focus-visible { outline: 2px solid #145d49; outline-offset: 2px; }
+.meta-setup-help { margin-top: 10px; padding: 12px 14px; background: #fff; border: 1px solid #d4e5dc; border-radius: 8px; }
+.meta-setup-help h3 { margin: 0 0 8px; }
+.meta-setup-help ol { margin: 0; padding-inline-start: 22px; }
+.meta-setup-help li + li { margin-top: 8px; }
+.meta-setup-help code { overflow-wrap: anywhere; }

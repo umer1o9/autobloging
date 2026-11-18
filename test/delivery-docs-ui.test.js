@@ -6,9 +6,9 @@ import { runInNewContext } from 'node:vm';
 const source = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
 const guide = await readFile(new URL('../docs/DELIVERY_API_INTEGRATION.md', import.meta.url), 'utf8');
 const openapi = JSON.parse(await readFile(new URL('../docs/DELIVERY_API.openapi.json', import.meta.url), 'utf8'));
-async function setup({ empty = false, selected = '' } = {}) {
-  const app = { innerHTML: '' }, modal = { open: false, classList: { add() {}, remove() {} } }, events = {}, location = { pathname: '/delivery-api', search: `?site=${selected}`, origin: 'https://studio.example.com' }, clipboard = [], downloads = [], nodes = [];
-  const records = { user: { name: 'Docs tester', workspace: 'workspace-docs' }, sites: empty ? [] : [
+async function setup({ empty = false, selected = '', pathname = '/delivery-api' } = {}) {
+  const app = { innerHTML: '' }, modal = { open: false, classList: { add() {}, remove() {} } }, events = {}, location = { pathname, search: `?site=${selected}`, origin: 'https://studio.example.com' }, clipboard = [], downloads = [], nodes = [];
+  const records = { user: { id: 'docs-account-id', name: 'Docs tester', workspace: 'workspace-docs' }, sites: empty ? [] : [
     { id: 'site-one', name: 'One <script>unsafe</script>', url: 'https://one.example', hasApiKey: true },
     { id: 'site-two', name: 'Second site', url: 'https://two.example', hasApiKey: false }
   ], articles: [{ id: 'article-one', siteId: 'site-one', status: 'published', slug: 'first-published-article' }], jobs: [], topics: [], provider: { ready: false, models: {} } };
@@ -24,7 +24,7 @@ async function setup({ empty = false, selected = '' } = {}) {
     navigator: { clipboard: { writeText: async text => clipboard.push(text) } },
     localStorage: { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value) },
     setInterval: () => 1, clearInterval() {}, setTimeout: () => 1, clearTimeout() {},
-    fetch: async path => ({ ok: true, json: async () => path === '/api/delivery-documentation' ? { guide, openapi } : records })
+    fetch: async path => ({ ok: true, json: async () => path === '/api/mcp-documentation' ? { guide: '# MCP setup guide' } : path === '/api/delivery-documentation' ? { guide, openapi } : records })
   };
   const api = await runInNewContext(`(async()=>{${source}\nreturn {integration,siteDeliveryDocumentation,site:()=>selectedSite};})()`, context);
   const click = (action, id = '') => events.click({ preventDefault() {}, target: { closest: () => ({ disabled: false, dataset: { action, id } }) } });
@@ -71,4 +71,26 @@ test('documentation has a useful setup state when no websites are connected', as
   const { app } = await setup({ empty: true });
   assert.match(app.innerHTML, /Add a website first/);
   assert.ok(!app.innerHTML.includes('YOUR_SITE_ID'));
+});
+
+test('REST and MCP remain separate navigable options and preserve the selected website', async () => {
+  const ui = await setup({ selected: 'site-one' });
+  assert.match(ui.app.innerHTML, /REST API integration/);
+  assert.match(ui.app.innerHTML, /site-one\/articles\/first-published-article/);
+  assert.ok(!ui.app.innerHTML.includes('MCP_USER_ID'));
+  await ui.click('nav-mcp');
+  assert.equal(ui.location.pathname, '/mcp-connection');
+  assert.match(ui.location.search, /site=site-one/);
+  assert.match(ui.app.innerHTML, /docs-account-id/);
+  assert.match(ui.app.innerHTML, /MCP_READ_TOKEN/);
+  assert.match(ui.app.innerHTML, /Open REST API documentation/);
+  await ui.click('download-mcp-guide');
+  assert.match(await ui.downloads[0].text(), /MCP setup guide/);
+  await ui.click('nav-api');
+  assert.equal(ui.location.pathname, '/delivery-api');
+  assert.match(ui.app.innerHTML, /1\. Article listing/);
+  assert.match(ui.app.innerHTML, /2\. Article details/);
+  const reloaded = await setup({ pathname: '/mcp-connection', selected: 'site-one' });
+  assert.match(reloaded.app.innerHTML, /MCP_USER_ID/);
+  assert.match(reloaded.app.innerHTML, /docs-account-id/);
 });
