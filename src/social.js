@@ -1,4 +1,4 @@
-import { linkedinConnection, linkedinFingerprint, publishLinkedIn } from './linkedin.js';
+import { linkedinConnection, linkedinFingerprint, linkedinDestinations, linkedinTargetSelected, publishLinkedIn } from './linkedin.js';
 import { randomUUID } from 'node:crypto';
 import { load } from 'cheerio';
 import { createSocialProvider } from './social-provider.js';
@@ -25,8 +25,8 @@ export class SocialPublishing {
     return site?.facebookConnection ? { token: site.facebookConnection, app: site.facebookApp } : null;
   }
 
-  fingerprint(site, platform) {
-    return platform === 'linkedin' ? linkedinFingerprint(linkedinConnection(site)) : this.provider.fingerprint(site.id, this.facebookCredentials(site));
+  fingerprint(site, platform, destination = '') {
+    return platform === 'linkedin' ? linkedinFingerprint(linkedinConnection(site), destination) : this.provider.fingerprint(site.id, this.facebookCredentials(site));
   }
 
   supports(platform) {
@@ -38,6 +38,7 @@ export class SocialPublishing {
     return { settings: {
       enabled: site.social?.enabled === true,
       platforms: site.social?.platforms || [],
+      linkedinDestinations: linkedinDestinations(site),
       path: site.social?.path || '',
       subreddit: site.social?.subreddit || '',
       flairId: site.social?.flairId || ''
@@ -56,6 +57,11 @@ export class SocialPublishing {
   async configure(workspace, site, input) {
     const selected = Array.isArray(input.platforms) ? [...new Set(input.platforms)] : [];
     if (selected.some(platform => !platforms.includes(platform))) throw problem(400, 'Choose supported social destinations.');
+    const destinations = input.linkedinDestinations ?? linkedinDestinations(site);
+    if (!Array.isArray(destinations) || destinations.length > 101 || destinations.some(id => typeof id !== 'string' || (id !== 'profile' && !site.linkedinPages?.some(page => page.id === id)))) throw problem(400, 'Choose LinkedIn destinations from the available profile and Pages.');
+    const selectedLinkedIn = [...new Set(destinations)];
+    if (selected.includes('linkedin') && !selectedLinkedIn.length) throw problem(400, 'Select at least one LinkedIn profile or Page.');
+    if (selected.includes('linkedin') && selectedLinkedIn.some(id => id !== 'profile') && !linkedinConnection(site)?.pageAccess) throw problem(409, 'Connect LinkedIn with approved Page permissions first.');
     const path = String(input.path || '').trim();
     if ((path || selected.length) && (!/^\/[a-zA-Z0-9/_-]*\{slug\}[a-zA-Z0-9/_.-]*$/.test(path) || path.startsWith('//') || path.length > 180)) {
       throw problem(400, 'Enter a public article path such as /blog/{slug} or /blog/{slug}.html.');
@@ -73,7 +79,8 @@ export class SocialPublishing {
     }
     await this.store.transaction(async () => {
       const current = await this.store.get('site', workspace, site.id);
-      current.social = { enabled, platforms: selected, path, subreddit, flairId };
+      if (selected.includes('linkedin') && selectedLinkedIn.some(id => id !== 'profile' && !current.linkedinPages?.some(page => page.id === id))) throw problem(409, 'LinkedIn Pages changed. Reload the destination list.');
+      current.social = { enabled, platforms: selected, linkedinDestinations: selectedLinkedIn, path, subreddit, flairId };
       await this.store.put('site', workspace, site.id, current);
       await this.store.audit(workspace, site.id, 'social.settings_updated', site.id);
     }, workspace);
@@ -103,25 +110,26 @@ export class SocialPublishing {
       tiktok: [clip(summary, 140), `Full article on ${new URL(site.url).hostname}.`],
       youtube: [clip(summary, 700), `Read the full article: ${articleUrl}`]
     };
-    for (const platform of settings.platforms) {
-      const [row] = await this.store.query('SELECT payload FROM social_posts WHERE article_id=? AND platform=?', [article.id, platform]);
+    const destinations = settings.platforms.flatMap(platform => platform === 'linkedin' ? linkedinDestinations(site).map(id => ({ platform, destination: id === 'profile' ? '' : id })) : [{ platform, destination: '' }]);
+    for (const { platform, destination } of destinations) {
+      const [row] = await this.store.query('SELECT payload FROM social_posts WHERE article_id=? AND platform=? AND destination=?', [article.id, platform, destination]);
       const previous = row && parse(row.payload);
       if (previous && (!['draft', 'cancelled'].includes(previous.status) || previous.providerId)) continue;
       const release = publish && settings.enabled && this.supports(platform) && (platform !== 'linkedin' || !!site.linkedinConnection);
       const edited = previous?.edited === true && previous.revision === article.revision && previous.articleUrl === articleUrl;
       const post = {
-        id: previous?.id || randomUUID(), siteId: site.id, articleId: article.id, platform, title, articleUrl,
+        id: previous?.id || randomUUID(), siteId: site.id, articleId: article.id, platform, destination, destinationName: platform === 'linkedin' ? (destination ? site.linkedinPages?.find(page => page.id === destination)?.name || destination : linkedinConnection(site)?.name || 'Personal profile') : '', title, articleUrl,
         text: edited ? previous.text : hooks[platform].filter(Boolean).join('\n\n'),
         edited,
         mediaUrl: edited ? previous.mediaUrl : (['instagram', 'tiktok'].includes(platform) ? httpsUrl(article.content.coverImage?.url) : ''),
         status: release ? 'queued' : publish && (!this.supports(platform) || (platform === 'linkedin' && !site.linkedinConnection)) ? 'manual' : 'draft', nextAt: time(), attempts: 0,
         revision: article.revision,
-        profileFingerprint: release ? this.fingerprint(site, platform) : null,
+        profileFingerprint: release ? this.fingerprint(site, platform, destination) : null,
         subreddit: settings.subreddit, flairId: settings.flairId
       };
       if (previous) await this.save(workspace, post);
-      else await this.store.query('INSERT INTO social_posts (id,workspace_id,site_id,article_id,platform,status,next_at,payload) VALUES (?,?,?,?,?,?,?,?)',
-        [post.id, workspace, site.id, article.id, platform, post.status, post.nextAt, JSON.stringify(post)]);
+      else await this.store.query('INSERT INTO social_posts (id,workspace_id,site_id,article_id,platform,destination,status,next_at,payload) VALUES (?,?,?,?,?,?,?,?,?)',
+        [post.id, workspace, site.id, article.id, platform, destination, post.status, post.nextAt, JSON.stringify(post)]);
     }
   }
 
@@ -140,8 +148,8 @@ export class SocialPublishing {
       if (input.queue === true) {
         const article = await this.store.get('article', workspace, post.articleId);
         const site = await this.store.get('site', workspace, siteId);
-        const fingerprint = this.fingerprint(site, post.platform);
-        if (article?.status !== 'published' || post.revision !== article.revision || !site.social?.enabled || !site.social.platforms.includes(post.platform) || !fingerprint) {
+        const fingerprint = this.fingerprint(site, post.platform, post.destination);
+        if (article?.status !== 'published' || post.revision !== article.revision || !site.social?.enabled || (!site.social.platforms.includes(post.platform) || (post.platform === 'linkedin' && !linkedinTargetSelected(site, post))) || !fingerprint) {
           throw problem(409, 'Publish the current article and enable its connected social destination first.');
         }
         if (!this.supports(post.platform)) throw problem(409, 'Copy this draft and publish it on the social platform.');
@@ -190,9 +198,9 @@ export class SocialPublishing {
     try {
       const site = await this.store.get('site', workspace, post.siteId);
       const article = await this.store.get('article', workspace, post.articleId);
-      const fingerprint = site && this.fingerprint(site, post.platform);
+      const fingerprint = site && this.fingerprint(site, post.platform, post.destination);
       if (submitted) return await update('uncertain', { error: 'Check the original provider’s post history.' });
-      if (article?.status !== 'published' || article.revision !== post.revision || !site?.social?.enabled || !site.social.platforms.includes(post.platform)) {
+      if (article?.status !== 'published' || article.revision !== post.revision || !site?.social?.enabled || (!site.social.platforms.includes(post.platform) || (post.platform === 'linkedin' && !linkedinTargetSelected(site, post)))) {
         return await update('cancelled', { error: 'The article or destination is no longer enabled for this post.' });
       }
       if (!this.supports(post.platform) || !fingerprint || post.profileFingerprint !== fingerprint) return await update('needs_attention', { error: 'The social account connection changed or expired. Review the post before sending.' });
@@ -215,8 +223,8 @@ export class SocialPublishing {
         const latest = row && parse(row.payload);
         const activeSite = await this.store.get('site', workspace, post.siteId);
         const activeArticle = await this.store.get('article', workspace, post.articleId);
-        if (!latest || latest.status !== 'queued' || latest.nextAt !== post.nextAt || !activeSite?.social?.enabled || !activeSite.social.platforms.includes(post.platform) || activeArticle?.status !== 'published' || activeArticle.revision !== post.revision) return false;
-        if (this.fingerprint(activeSite, post.platform) !== fingerprint) return false;
+        if (!latest || latest.status !== 'queued' || latest.nextAt !== post.nextAt || !activeSite?.social?.enabled || (!activeSite.social.platforms.includes(post.platform) || (post.platform === 'linkedin' && !linkedinTargetSelected(activeSite, post))) || activeArticle?.status !== 'published' || activeArticle.revision !== post.revision) return false;
+        if (this.fingerprint(activeSite, post.platform, post.destination) !== fingerprint) return false;
         return update('sending', { nextAt: after(120000), error: null });
       }, workspace);
       if (!claimed) return;

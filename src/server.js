@@ -1,4 +1,4 @@
-import { linkedinLogin, linkedinConnection } from './linkedin.js';
+import { linkedinLogin, linkedinConnection, linkedinPages } from './linkedin.js';
 import { facebookLogin, facebookAppEnvironment } from './facebook-login.js';
 import http from 'node:http';
 import { startServer } from './startup.js';
@@ -98,6 +98,7 @@ export async function createApp({ database = process.env.DATABASE_URL, origin = 
             const current = await domain.need('site', workspace, siteId);
             if (JSON.stringify(current.linkedinApp) !== JSON.stringify(site.linkedinApp) || !(await store.sessionUser(flow.binding, Date.now()))) throw new Error('LinkedIn setup changed.');
             current.linkedinConnection = login.seal(account);
+            delete current.linkedinPages;
             if (current.social) current.social.enabled = false;
             await store.put('site', workspace, siteId, current);
             await store.audit(workspace, siteId, 'social.linkedin_connected', siteId);
@@ -199,9 +200,21 @@ export async function createApp({ database = process.env.DATABASE_URL, origin = 
         }
         if (path === '/api/sites' && method === 'POST') return send(res, 201, { site: await domain.saveSite(workspace, await body(req)) });
         let match;
-        if ((match = path.match(/^\/api\/sites\/([^/]+)\/social\/linkedin\/(settings|start|disconnect)$/))) {
+        if ((match = path.match(/^\/api\/sites\/([^/]+)\/social\/linkedin\/(settings|start|pages|disconnect)$/))) {
           const site = await domain.need('site', workspace, match[1]);
           const action = match[2];
+          if (method === 'POST' && action === 'pages') {
+            const account = linkedinConnection(site);
+            if (!account) throw new AppError(409, 'Connect your LinkedIn account first.');
+            const pages = await linkedinPages(account);
+            await store.transaction(async () => {
+              const current = await domain.need('site', workspace, site.id);
+              if (current.linkedinConnection !== site.linkedinConnection) throw new AppError(409, 'LinkedIn connection changed. Refresh Pages again.');
+              current.linkedinPages = pages;
+              await store.put('site', workspace, site.id, current);
+            }, workspace);
+            return send(res, 200, { pages });
+          }
           if (method === 'POST' && action === 'start') {
             const login = linkedinLogin(origin, site.linkedinApp);
             if (!login.configured) throw new AppError(409, 'Save LinkedIn app credentials and open AutoBlog Studio on HTTPS first.');
@@ -215,16 +228,17 @@ export async function createApp({ database = process.env.DATABASE_URL, origin = 
           if (setup) {
             const configuredOrigin = new URL(origin);
             if (configuredOrigin.protocol !== 'https:' && !['localhost', '127.0.0.1', '[::1]'].includes(configuredOrigin.hostname)) throw new AppError(403, 'Use HTTPS to save LinkedIn app settings.');
-            const { clientId, clientSecret } = await body(req);
+            const { clientId, clientSecret, pageAccess } = await body(req);
             if (typeof clientId !== 'string' || !/^[a-zA-Z0-9_-]{4,128}$/.test(clientId) ||
                 typeof clientSecret !== 'string' || !/^\S{6,256}$/.test(clientSecret)) throw new AppError(400, 'Enter a valid LinkedIn Client ID and Client Secret.');
-            app = { id: clientId, secret: clientSecret, origin };
+            app = { id: clientId, secret: clientSecret, origin, pageAccess: pageAccess === true };
           }
           await store.transaction(async () => {
             const current = await domain.need('site', workspace, site.id);
             if (setup && JSON.stringify(current.linkedinApp) === JSON.stringify(app)) return;
             if (setup) current.linkedinApp = app;
             delete current.linkedinConnection;
+            delete current.linkedinPages;
             if (current.social) current.social.enabled = false;
             await store.put('site', workspace, site.id, current);
             await store.audit(workspace, site.id, setup ? 'social.linkedin_app_configured' : 'social.linkedin_disconnected', site.id);
@@ -300,6 +314,7 @@ export async function createApp({ database = process.env.DATABASE_URL, origin = 
           const site = await domain.need('site', workspace, match[1]);
           if (!match[2] && method === 'GET') return send(res, 200, { ...await domain.social.view(workspace, site), facebookLoginReady: facebookFor(site).configured, facebookAppId: site.facebookApp?.id || '', facebookCallback: new URL('/facebook/callback', origin).href, facebookLinked: !!site.facebookConnection, linkedinClientId: site.linkedinApp?.id || '',
             linkedinLoginReady: linkedinLogin(origin, site.linkedinApp).configured, linkedinCallback: new URL('/linkedin/callback', origin).href,
+            linkedinPageAccess: site.linkedinApp?.pageAccess === true, linkedinPagesReady: linkedinConnection(site)?.pageAccess === true, linkedinPages: site.linkedinPages || [],
             linkedinLinked: !!site.linkedinConnection, linkedinMember: linkedinConnection(site)?.name || '', linkedinActive: !!linkedinConnection(site) });
           if (!match[2] && method === 'PUT') {
             await domain.social.configure(workspace, site, await body(req));

@@ -204,11 +204,17 @@ async function knowledgeDialog(id) {
   const { knowledge: k, pages } = await api(`/api/sites/${id}/knowledge`);
   openDialog('Website knowledge · ' + siteName(id), `<p>${badge(k.status)} · ${k.indexedPages || 0} indexed pages · ${k.pageCount || 0} saved in current run · ${k.pending || 0} URLs pending</p><p class="help">${e(k.indexType || '')}. The latest completed/partial snapshot is used by the AI; an in-progress resync keeps the previous snapshot available. It supplements independent research.</p>${k.error || k.warning ? `<div class="notice warning">${e(k.error || k.warning)}</div>` : ''}<div class="actions">${btn('knowledge', 'Refresh status', id)}${btn('knowledge-sync', 'Resync website', id)}${pages.length ? btn('knowledge-download', 'Download all Markdown', id) : ''}</div><div class="knowledge-search"><label for="knowledge-query">Find relevant website passages</label><input id="knowledge-query" maxlength="500" placeholder="e.g. services, target audience, software integrations">${btn('knowledge-search', 'Search saved content', id)}<div id="knowledge-search-results" aria-live="polite"></div></div><div class="table-wrap"><table><thead><tr><th>Saved page</th><th>Details</th><th></th></tr></thead><tbody>${pages.map(page => `<tr><td><strong>${e(page.title || page.url)}</strong><p class="help">${e(page.url)}</p></td><td>${page.headings.length} headings · ${page.textLength} characters<p class="help">${e(new Date(page.fetchedAt).toLocaleString())}</p></td><td><button data-action="knowledge-document" data-id="${e(id)}" data-url="${e(page.url)}">View Markdown</button></td></tr>`).join('') || '<tr><td colspan="3">No saved pages yet. Queue a resync and check again after the worker runs.</td></tr>'}</tbody></table></div>${k.errors?.length ? `<details><summary>Skipped or failed URLs (${k.errors.length} recent)</summary><ul>${k.errors.map(item => `<li><strong>${e(item.url)}</strong><br>${e(item.error)}</li>`).join('')}</ul></details>` : ''}<div class="dialog-foot">${btn('close', 'Close')}</div>`, true);
 }
-const socialLabels = { facebook: 'Facebook Page', instagram: 'Instagram professional account', linkedin: 'LinkedIn profile', reddit: 'Reddit subreddit', tiktok: 'TikTok (manual posting)', youtube: 'YouTube channel' };
+const socialLabels = { facebook: 'Facebook Page', instagram: 'Instagram professional account', linkedin: 'LinkedIn', reddit: 'Reddit subreddit', tiktok: 'TikTok (manual posting)', youtube: 'YouTube channel' };
 async function socialDialog(siteId, linked) {
-  const { settings, providerConfigured, posts, facebookLoginReady, facebookLinked, facebookAppId, facebookCallback, linkedinClientId, linkedinLoginReady, linkedinCallback, linkedinLinked, linkedinMember, linkedinActive } = await api(`/api/sites/${siteId}/social`);
+  const { settings, providerConfigured, posts, facebookLoginReady, facebookLinked, facebookAppId, facebookCallback, linkedinClientId, linkedinLoginReady, linkedinCallback, linkedinLinked, linkedinMember, linkedinActive, linkedinPageAccess, linkedinPagesReady, linkedinPages = [] } = await api(`/api/sites/${siteId}/social`);
   const destinations = Object.entries(socialLabels).map(([platform, label]) => `<label><input type="checkbox" name="platform" value="${platform}" ${settings.platforms.includes(platform) ? 'checked' : ''}> ${label}${linked ? (linked.includes(platform) ? ' · Linked' : ' · Not linked') : ''}</label>`).join('');
-  const rows = posts.map(post => `<tr><td><strong>${e(post.title)}</strong><p class="help">${e(socialLabels[post.platform])}</p></td><td>${e(post.status.replaceAll('_', ' '))}${post.error ? `<p class="help">${e(post.error)}</p>` : ''}</td><td><div class="actions">${btn('social-post', 'View post', post.id)}${post.postUrl ? `<a href="${e(post.postUrl)}" target="_blank" rel="noopener noreferrer">Open published post</a>` : ''}</div></td></tr>`).join('');
+  const linkedinTargets = `<fieldset><legend>LinkedIn destinations</legend>
+    <label><input type="checkbox" name="linkedinDestination" value="profile" ${(settings.linkedinDestinations || ['profile']).includes('profile') ? 'checked' : ''}> Personal profile · ${e(linkedinMember || 'Connect LinkedIn first')}</label>
+    ${linkedinPages.map(page => `<label><input type="checkbox" name="linkedinDestination" value="${e(page.id)}" ${(settings.linkedinDestinations || []).includes(page.id) ? 'checked' : ''}> Company Page · ${e(page.name)}</label>`).join('')}
+    ${linkedinPagesReady ? `<p class="help">Select any combination of your profile and Pages. Use Refresh LinkedIn Pages to update the list.</p>` : '<p class="help">Page selection requires Community Management API approval. Enable approved Page permissions in Configure LinkedIn app, then reconnect LinkedIn.</p>'}
+    ${linkedinPagesReady && !linkedinPages.length ? '<p class="help">Refresh LinkedIn Pages to find Pages you can publish to.</p>' : ''}
+  </fieldset>`;
+  const rows = posts.map(post => `<tr><td><strong>${e(post.title)}</strong><p class="help">${e(socialLabels[post.platform])}${post.destinationName ? ` · ${e(post.destinationName)}` : ''}</p></td><td>${e(post.status.replaceAll('_', ' '))}${post.error ? `<p class="help">${e(post.error)}</p>` : ''}</td><td><div class="actions">${btn('social-post', 'View post', post.id)}${post.postUrl ? `<a href="${e(post.postUrl)}" target="_blank" rel="noopener noreferrer">Open published post</a>` : ''}</div></td></tr>`).join('');
   const httpsCallback = facebookCallback?.startsWith('https://');
   const facebookSetup = `<section class="meta-setup">
     <button type="button" class="meta-setup-info" data-action="facebook-setup-help" aria-label="How to find your Meta app details" aria-controls="facebook-setup-help" aria-expanded="false" title="How to find your Meta app details">i</button>
@@ -234,6 +240,7 @@ async function socialDialog(siteId, linked) {
     <p><strong>LinkedIn</strong> · ${linkedinActive ? e(linkedinMember || 'Connected profile') : linkedinLinked ? 'Reconnect to renew access' : 'No profile connected'}</p>
     <div class="actions">
       ${linkedinLoginReady ? btn('linkedin-start', linkedinLinked ? 'Reconnect LinkedIn' : 'Connect LinkedIn', siteId, 'primary') : ''}
+      ${linkedinActive ? btn('linkedin-pages', 'Refresh LinkedIn Pages', siteId) : ''}
       ${linkedinLinked ? btn('linkedin-disconnect', 'Disconnect LinkedIn', siteId) : ''}
     </div>
     <details>
@@ -246,18 +253,20 @@ async function socialDialog(siteId, linked) {
       <form id="linkedin-settings-form" data-id="${e(siteId)}">
         ${field('LinkedIn Client ID', 'clientId', linkedinClientId, 'text', 'required')}
         ${field('LinkedIn Client Secret', 'clientSecret', '', 'password', 'required autocomplete="new-password"')}
+        <label><input type="checkbox" name="pageAccess" ${linkedinPageAccess ? 'checked' : ''}> Enable approved LinkedIn Page permissions</label>
+        <p class="help">Your app must have Community Management API access with rw_organization_admin and w_organization_social. Save and reconnect after approval.</p>
         <div class="dialog-foot"><button type="submit" class="primary">Save LinkedIn app</button></div>
       </form>
     </details>
   </section>`;
-  openDialog('Social publishing · ' + siteName(siteId), `${linkedinSetup}<p>${providerConfigured ? 'A Facebook Page connection is configured.' : 'Connect a Facebook Page to publish automatically.'}</p><div class="actions">${facebookLoginReady ? btn('facebook-start', facebookLinked ? 'Change Facebook Page' : 'Log in with Facebook', siteId, 'primary') : '<p class="help">Save your Meta app below. Facebook sign-in becomes available on the HTTPS version of AutoBlog Studio.</p>'}${facebookLinked ? btn('facebook-disconnect', 'Disconnect Facebook', siteId) : ''}</div>${facebookSetup}<p class="help">Website ID <code>${e(siteId)}</code>. Select destinations to prepare drafts. Connected Facebook Pages and LinkedIn profiles can publish automatically once the public article is live. Other destinations provide drafts for manual posting.</p><form id="social-form" data-id="${e(siteId)}">${field('Public article path', 'path', settings.path, 'text', 'placeholder="/blog/{slug}.html"')}<fieldset><legend>Destinations</legend>${destinations}</fieldset>${field('Subreddit (when Reddit is selected)', 'subreddit', settings.subreddit)}${field('Reddit flair ID (optional)', 'flairId', settings.flairId)}<label><input type="checkbox" name="enabled" ${settings.enabled ? 'checked' : ''}> Publish automatically to connected destinations when the article is live</label><div class="dialog-foot">${providerConfigured ? btn('social-accounts', 'Check linked accounts', siteId) : ''}<button class="primary" type="submit">Save social settings</button></div></form><h3>Recent social posts</h3>${rows ? `<div class="table-wrap"><table><thead><tr><th>Article and destination</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="help">Posts appear here when a new article is generated, saved or published.</p>'}`, true);
+  openDialog('Social publishing · ' + siteName(siteId), `${linkedinSetup}<p>${providerConfigured ? 'A Facebook Page connection is configured.' : 'Connect a Facebook Page to publish automatically.'}</p><div class="actions">${facebookLoginReady ? btn('facebook-start', facebookLinked ? 'Change Facebook Page' : 'Log in with Facebook', siteId, 'primary') : '<p class="help">Save your Meta app below. Facebook sign-in becomes available on the HTTPS version of AutoBlog Studio.</p>'}${facebookLinked ? btn('facebook-disconnect', 'Disconnect Facebook', siteId) : ''}</div>${facebookSetup}<p class="help">Website ID <code>${e(siteId)}</code>. Select destinations to prepare drafts. Connected Facebook Pages and LinkedIn profiles can publish automatically once the public article is live. Other destinations provide drafts for manual posting.</p><form id="social-form" data-id="${e(siteId)}">${field('Public article path', 'path', settings.path, 'text', 'placeholder="/blog/{slug}.html"')}<fieldset><legend>Destinations</legend>${destinations}</fieldset>${linkedinTargets}${field('Subreddit (when Reddit is selected)', 'subreddit', settings.subreddit)}${field('Reddit flair ID (optional)', 'flairId', settings.flairId)}<label><input type="checkbox" name="enabled" ${settings.enabled ? 'checked' : ''}> Publish automatically to connected destinations when the article is live</label><div class="dialog-foot">${providerConfigured ? btn('social-accounts', 'Check linked accounts', siteId) : ''}<button class="primary" type="submit">Save social settings</button></div></form><h3>Recent social posts</h3>${rows ? `<div class="table-wrap"><table><thead><tr><th>Article and destination</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="help">Posts appear here when a new article is generated, saved or published.</p>'}`, true);
   modal.dataset.socialSite = siteId;
   modal.socialPosts = posts;
 }
 function socialPostDialog(siteId, post) {
   const editable = ['draft', 'needs_attention', 'manual'].includes(post.status);
   const mediaLabel = post.platform === 'youtube' ? 'Public HTTPS video URL' : 'Public HTTPS media URL';
-  openDialog(socialLabels[post.platform] + ' post', `<p><strong>${e(post.title)}</strong></p><p>${e(post.status.replaceAll('_', ' '))}${post.error ? ` · ${e(post.error)}` : ''}</p><p><a href="${e(post.articleUrl)}" target="_blank" rel="noopener noreferrer">Open public article URL</a></p>${editable ? `<form id="social-post-form" data-site="${e(siteId)}" data-id="${e(post.id)}">${area('Post text', 'text', post.text)}${field(mediaLabel, 'mediaUrl', post.mediaUrl, 'url')}${['facebook', 'linkedin'].includes(post.platform) && ['draft', 'needs_attention'].includes(post.status) ? '<label><input type="checkbox" name="queue"> Queue this post if the article is published</label>' : ''}<div class="dialog-foot">${btn('social', 'Back to social publishing', siteId)}${btn('social-copy', 'Copy post text', post.id)}<button class="primary" type="submit">Save post</button></div></form>` : `<pre>${e(post.text)}</pre>${post.mediaUrl ? `<p><a href="${e(post.mediaUrl)}" target="_blank" rel="noopener noreferrer">Open post media</a></p>` : ''}<div class="dialog-foot">${btn('social', 'Back to social publishing', siteId)}${btn('social-copy', 'Copy post text', post.id)}</div>`}`, true);
+  openDialog(socialLabels[post.platform] + (post.destinationName ? ' · ' + post.destinationName : '') + ' post', `<p><strong>${e(post.title)}</strong></p><p>${e(post.status.replaceAll('_', ' '))}${post.error ? ` · ${e(post.error)}` : ''}</p><p><a href="${e(post.articleUrl)}" target="_blank" rel="noopener noreferrer">Open public article URL</a></p>${editable ? `<form id="social-post-form" data-site="${e(siteId)}" data-id="${e(post.id)}">${area('Post text', 'text', post.text)}${field(mediaLabel, 'mediaUrl', post.mediaUrl, 'url')}${['facebook', 'linkedin'].includes(post.platform) && ['draft', 'needs_attention'].includes(post.status) ? '<label><input type="checkbox" name="queue"> Queue this post if the article is published</label>' : ''}<div class="dialog-foot">${btn('social', 'Back to social publishing', siteId)}${btn('social-copy', 'Copy post text', post.id)}<button class="primary" type="submit">Save post</button></div></form>` : `<pre>${e(post.text)}</pre>${post.mediaUrl ? `<p><a href="${e(post.mediaUrl)}" target="_blank" rel="noopener noreferrer">Open post media</a></p>` : ''}<div class="dialog-foot">${btn('social', 'Back to social publishing', siteId)}${btn('social-copy', 'Copy post text', post.id)}</div>`}`, true);
 }
 function websites() {
   const site = data.sites.find(item => item.id === selectedSite);
@@ -533,6 +542,10 @@ document.addEventListener('click', async event => {
       button.setAttribute('aria-expanded', String(!help.hidden));
       return;
     }
+    if (action === 'linkedin-pages') {
+      await api(`/api/sites/${id}/social/linkedin/pages`, 'POST');
+      return await socialDialog(id);
+    }
     if (action === 'linkedin-start') {
       const { url } = await api(`/api/sites/${id}/social/linkedin/start`, 'POST');
       location.assign(url);
@@ -592,7 +605,7 @@ document.addEventListener('submit', async event => {
     if (form.id === 'auth-form') { await api(`/api/auth/${register ? 'register' : 'login'}`, 'POST', fields); await refresh(); await restoreRoute(typeof location !== 'undefined' && location.pathname === '/'); startPolling(); return; }
     if (form.id === 'automation-form') { await api(`/api/sites/${form.dataset.id}/automation`, 'POST', { enabled: true, mode: fields.mode, themes: fields.themes.split('\n') }); modal.close(); await refresh(); return toast('Automation saved. The status card will show the next step.'); }
     if (form.id === 'linkedin-settings-form') {
-      await api(`/api/sites/${form.dataset.id}/social/linkedin/settings`, 'PUT', { clientId: fields.clientId.trim(), clientSecret: fields.clientSecret.trim() });
+      await api(`/api/sites/${form.dataset.id}/social/linkedin/settings`, 'PUT', { clientId: fields.clientId.trim(), clientSecret: fields.clientSecret.trim(), pageAccess: fields.pageAccess === 'on' });
       form.reset();
       await socialDialog(form.dataset.id);
       return toast('LinkedIn app settings saved.');
@@ -610,7 +623,7 @@ document.addEventListener('submit', async event => {
     }
     if (form.id === 'social-form') {
       const platforms = new FormData(form).getAll('platform');
-      await api(`/api/sites/${form.dataset.id}/social`, 'PUT', { ...fields, platforms, enabled: fields.enabled === 'on' });
+      await api(`/api/sites/${form.dataset.id}/social`, 'PUT', { ...fields, platforms, linkedinDestinations: new FormData(form).getAll('linkedinDestination'), enabled: fields.enabled === 'on' });
       await socialDialog(form.dataset.id);
       return toast('Social settings saved.');
     }
