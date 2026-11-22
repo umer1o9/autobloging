@@ -75,6 +75,22 @@ test('website summary, status labels, escaped titles and counts render in shared
   assert.match(app.innerHTML, /calendar-entry-site/);
 });
 
+test('calendar LinkedIn check marks require confirmed social publication per article', async () => {
+  const records = fixtures();
+  records.sites[0].linkedinActive = true;
+  records.articles[0].linkedinPublished = true;
+  records.articles[1].status = 'published';
+  const { api, app } = await harness({ records });
+  api.selectWebsite('');
+  const card = id => app.innerHTML.match(new RegExp('data-id="' + id + '"[^]*?</button>'))[0];
+  assert.match(card('a1'), /LinkedIn connected · Posted to LinkedIn/);
+  assert.match(card('a1'), /calendar-linkedin-check/);
+  assert.match(card('a2'), /LinkedIn connected · No confirmed post/);
+  assert.doesNotMatch(card('a2'), /calendar-linkedin-check/);
+  assert.match(card('a3'), /LinkedIn disconnected · No confirmed post/);
+  assert.doesNotMatch(card('j2'), /calendar-linkedin/);
+});
+
 test('four-entry limit expands and persisted expansion restores after reload', async () => {
   const records = fixtures();
   records.articles = Array.from({ length: 6 }, (_, i) => ({ id: `a${i}`, topicId: `t${i}`, siteId: 's1', title: `Article ${i}`, status: 'draft', createdAt: '2026-10-25T12:00:00Z' })); records.jobs = [];

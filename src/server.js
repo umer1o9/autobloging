@@ -194,9 +194,15 @@ export async function createApp({ database = process.env.DATABASE_URL, origin = 
           return send(res, 200, { ok: true }, { 'set-cookie': cookie('') });
         }
         if (path === '/api/dashboard' && method === 'GET') {
-          const [siteRecords, topics, articleRecords, jobRecords] = await Promise.all([store.list('site', workspace), store.list('topic', workspace), store.list('article', workspace), store.list('job', workspace)]);
-          const sites = await Promise.all(siteRecords.map(async s => ({ ...domain.safeSite(s), reservedCents: await domain.reserved(workspace, s.id), knowledge: knowledgeSummary(await store.getKnowledge(workspace, s.id)) })));
-          return send(res, 200, { user, sites, topics, articles: articleRecords.map(({ content, research, ...a }) => ({ ...a, title: content.title, slug: content.slug })), jobs: jobRecords.map(({ research, candidate, settings, websiteKnowledge, ...j }) => j), provider: { ready: provider.ready, models: provider.models, images: { configured: imageProvider.configured, defaults: imageProvider.defaults, models: imageProvider.models } } });
+          const [siteRecords, topics, articleRecords, jobRecords, linkedInPublished] = await Promise.all([
+            store.list('site', workspace), store.list('topic', workspace), store.list('article', workspace),
+            store.list('job', workspace), domain.social.publishedLinkedInArticleIds(workspace)
+          ]);
+          const sites = await Promise.all(siteRecords.map(async s => ({ ...domain.safeSite(s), linkedinActive: !!linkedinConnection(s), reservedCents: await domain.reserved(workspace, s.id), knowledge: knowledgeSummary(await store.getKnowledge(workspace, s.id)) })));
+          const articles = articleRecords.map(({ content, research, ...a }) => ({
+            ...a, title: content.title, slug: content.slug, linkedinPublished: linkedInPublished.has(a.id)
+          }));
+          return send(res, 200, { user, sites, topics, articles, jobs: jobRecords.map(({ research, candidate, settings, websiteKnowledge, ...j }) => j), provider: { ready: provider.ready, models: provider.models, images: { configured: imageProvider.configured, defaults: imageProvider.defaults, models: imageProvider.models } } });
         }
         if (path === '/api/sites' && method === 'POST') return send(res, 201, { site: await domain.saveSite(workspace, await body(req)) });
         let match;

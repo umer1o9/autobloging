@@ -293,6 +293,22 @@ function monthCells(month) {
   const weeks = Math.ceil(((first.getUTCDay() + 6) % 7 + last.getUTCDate()) / 7);
   return Array.from({ length: weeks * 7 }, (_, index) => { const day = new Date(start); day.setUTCDate(start.getUTCDate() + index); return day.toISOString().slice(0, 10); });
 }
+function calendarEntryCard(entry) {
+  const isArticle = entry.kind === 'article';
+  const linkedinActive = isArticle && data.sites.find(site => site.id === entry.siteId)?.linkedinActive;
+  const linkedinPublished = isArticle && entry.linkedinPublished;
+  const connection = linkedinActive ? 'LinkedIn connected' : 'LinkedIn disconnected';
+  const linkedinStatus = linkedinPublished ? connection + ' · Posted to LinkedIn' : connection + ' · No confirmed post';
+  const linkedinIcon = isArticle ? `<span class="calendar-linkedin${linkedinActive ? ' is-connected' : ''}" title="${linkedinStatus}" aria-hidden="true">in${linkedinPublished ? '<span class="calendar-linkedin-check">✓</span>' : ''}</span>` : '';
+
+  return `<button class="calendar-entry status-${e(entry.status)}" data-action="${isArticle ? 'view-article' : 'job'}" data-id="${e(entry.id)}"
+    title="${e(entry.title)}" aria-label="${isArticle ? 'View article' : 'View job details'}: ${e(entry.title)}; ${e(entry.status)}; ${e(siteName(entry.siteId))}${isArticle ? '; ' + linkedinStatus : ''}">
+    <span class="calendar-entry-title">${e(entry.title)}</span>
+    <span class="calendar-entry-status-row"><span class="calendar-entry-meta">${e(entry.status)}${isArticle ? '' : ' · ' + e(entry.stage)}</span>${linkedinIcon}</span>
+    ${!selectedSite ? `<span class="calendar-entry-site">${e(siteName(entry.siteId))}</span>` : ''}
+    <span class="calendar-entry-action">${isArticle ? 'View article →' : 'View job details →'}</span>
+  </button>`;
+}
 function monthCalendar() {
   if (!validMonth(calendarMonth)) calendarMonth = dateKey(new Date()).slice(0, 7);
   const entries = calendarEntries(), grouped = new Map();
@@ -302,7 +318,7 @@ function monthCalendar() {
   const statusLabels = ['published', 'scheduled', 'draft', 'review', 'approved', 'queued', 'running', 'failed', 'rejected'];
   return `<section class="panel month-calendar"><div class="calendar-toolbar"><div><h2>${e(monthLabel)}</h2><p class="help">${visible.filter(entry => entry.kind === 'article').length} articles · ${visible.filter(entry => entry.kind === 'job').length} pending / failed jobs · ${e(calendarTimezone())}</p></div><div class="calendar-controls">${btn('calendar-prev', '← Previous month')}${btn('calendar-today', 'Today')}${btn('calendar-next', 'Next month →')}<div><label for="calendar-date">Go to date</label><input type="date" id="calendar-date" min="1000-01-01" max="9999-12-31" value="${e(calendarDate || calendarMonth + '-01')}"></div></div></div><div class="calendar-legend" aria-label="Status legend">${statusLabels.map(status => `<span class="calendar-status status-${status}">${status}</span>`).join('')}</div><div class="calendar-scroll" tabindex="0" aria-label="Monthly article calendar; scroll horizontally on small screens"><div class="month-grid">${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(day => `<div class="weekday">${day}</div>`).join('')}${monthCells(calendarMonth).map(day => {
     const records = grouped.get(day) || [], expanded = expandedDays.has(day), shown = expanded ? records : records.slice(0, 4), articleCount = records.filter(entry => entry.kind === 'article').length;
-    return `<section class="calendar-day ${day.startsWith(calendarMonth) ? '' : 'outside-month'} ${day === calendarDate ? 'selected-day' : ''} ${day === today ? 'today' : ''}" aria-label="${day}"><div class="calendar-day-head"><time datetime="${day}">${Number(day.slice(-2))}</time>${day === today ? '<span>Today</span>' : ''}</div>${records.length ? `<p class="day-count">${articleCount} article${articleCount === 1 ? '' : 's'} · ${records.length - articleCount} job${records.length - articleCount === 1 ? '' : 's'}</p>` : '<p class="day-count">No articles</p>'}<div class="day-entries">${shown.map(entry => `<button class="calendar-entry status-${e(entry.status)}" data-action="${entry.kind === 'article' ? 'view-article' : 'job'}" data-id="${e(entry.id)}" title="${e(entry.title)}" aria-label="${entry.kind === 'article' ? 'View article' : 'View job details'}: ${e(entry.title)}; ${e(entry.status)}; ${e(siteName(entry.siteId))}"><span class="calendar-entry-title">${e(entry.title)}</span><span class="calendar-entry-meta">${e(entry.status)}${entry.kind === 'job' ? ' · ' + e(entry.stage) : ''}</span>${!selectedSite ? `<span class="calendar-entry-site">${e(siteName(entry.siteId))}</span>` : ''}<span class="calendar-entry-action">${entry.kind === 'article' ? 'View article →' : 'View job details →'}</span></button>`).join('')}</div>${records.length > 4 ? `<button class="day-more" data-action="calendar-expand" data-id="${day}" aria-expanded="${expanded}">${expanded ? 'Show less' : `Show ${records.length - 4} more`}</button>` : ''}</section>`;
+    return `<section class="calendar-day ${day.startsWith(calendarMonth) ? '' : 'outside-month'} ${day === calendarDate ? 'selected-day' : ''} ${day === today ? 'today' : ''}" aria-label="${day}"><div class="calendar-day-head"><time datetime="${day}">${Number(day.slice(-2))}</time>${day === today ? '<span>Today</span>' : ''}</div>${records.length ? `<p class="day-count">${articleCount} article${articleCount === 1 ? '' : 's'} · ${records.length - articleCount} job${records.length - articleCount === 1 ? '' : 's'}</p>` : '<p class="day-count">No articles</p>'}<div class="day-entries">${shown.map(calendarEntryCard).join('')}</div>${records.length > 4 ? `<button class="day-more" data-action="calendar-expand" data-id="${day}" aria-expanded="${expanded}">${expanded ? 'Show less' : `Show ${records.length - 4} more`}</button>` : ''}</section>`;
   }).join('')}</div></div>${!visible.length ? '<p class="calendar-empty">No articles or generation jobs this month. Choose another month or website.</p>' : ''}</section>`;
 }
 function calendar() { return heading('Publishing calendar', 'Browse articles and generation progress by date.') + monthCalendar(); }

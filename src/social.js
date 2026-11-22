@@ -33,6 +33,14 @@ export class SocialPublishing {
     return platform === 'linkedin' || this.provider.supports(platform);
   }
 
+  async publishedLinkedInArticleIds(workspace) {
+    const rows = await this.store.query(
+      "SELECT DISTINCT article_id AS articleId FROM social_posts WHERE workspace_id=? AND platform='linkedin' AND status='published'",
+      [workspace]
+    );
+    return new Set(rows.map(({ articleId }) => articleId));
+  }
+
   async view(workspace, site) {
     const rows = await this.store.query('SELECT payload FROM social_posts WHERE workspace_id=? AND site_id=? ORDER BY next_at DESC,id DESC LIMIT 100', [workspace, site.id]);
     return { settings: {
