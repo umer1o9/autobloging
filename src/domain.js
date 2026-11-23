@@ -82,17 +82,23 @@ export class Domain {
       if (options.workspace && options.workspace !== workspace) continue;
       if (options.siteId && options.siteId !== candidate.id) continue;
       if (!candidate.automation?.enabled) continue;
-      await this.store.transaction(async () => {
+      const result = await this.store.transaction(async () => {
         let site = await this.need('site', workspace, candidate.id), config = site.automation;
         if (!config?.enabled) return;
-        let message, queuedJob = false;
+        let message, job, blocked, acknowledgedFailures = false;
         try {
           requireValue(!site.publicationPaused && !site.generationPaused, 'Website generation or publication is paused.', 409);
           if (config.mode === 'automatic') site = await this.prepareAutomaticSite(workspace, site);
           const articles = await this.store.list('article', workspace, site.id);
           const jobs = await this.store.list('job', workspace, site.id);
+          const failures = jobs.filter(job => job.status === 'failed' && !config.acknowledgedFailures?.includes(job.id));
+          if (options.force && failures.length) {
+            config.acknowledgedFailures = [...(config.acknowledgedFailures || []), ...failures.map(job => job.id)];
+            await this.store.audit(workspace, site.id, 'generation.failures_acknowledged', site.id);
+            acknowledgedFailures = true;
+          }
           // A failed paid job needs deliberate acknowledgement; never retry it in a loop.
-          requireValue(!jobs.some(j => j.status === 'failed' && !config.acknowledgedFailures?.includes(j.id)), 'A job failed. Inspect Activity, fix the issue, then click Resume.', 409);
+          requireValue(options.force || !failures.length, 'A job failed. Inspect Activity, fix the issue, then click Resume.', 409);
           // Only human-approved articles or drafts produced by this automation can advance.
           const ready = articles.filter(a => a.status === 'approved' ||
             (config.mode === 'automatic' && a.status === 'draft' && a.automationGenerated && a.revision === 1));
@@ -113,7 +119,7 @@ export class Domain {
             await this.store.audit(workspace, site.id, automatic ? 'article.automatically_scheduled' : 'article.auto_scheduled_after_review', article.id);
           }
           requireValue(this.provider?.ready, 'Add GEMINI_API_KEY and enable generation in .env, then restart the server.', 503);
-          requireValue(!jobs.some(j => ['queued', 'running'].includes(j.status)), 'Research and writing are in progress.', 409);
+          requireValue(options.force || !jobs.some(j => ['queued', 'running'].includes(j.status)), 'Research and writing are in progress.', 409);
           requireValue(options.force || !config.nextRunAt || new Date(config.nextRunAt) <= at, `Next article: ${config.nextRunAt}`, 409);
           let topic = (await this.store.list('topic', workspace, site.id)).filter(t => t.status === 'queued' && !t.articleId)
             .sort((a, b) => a.priority - b.priority || a.createdAt.localeCompare(b.createdAt))[0];
@@ -121,15 +127,15 @@ export class Domain {
             const existing = await this.store.list('topic', workspace, site.id);
             const articleTitles = articles.map(article => article.content?.title).filter(Boolean);
             topic = await this.createTopic(workspace, site.id, {
-              title: `Website discovery ${at.toISOString()}`,
+              title: `Website discovery ${at.toISOString()} · ${randomUUID().slice(0, 8)}`,
               brief: `Inspect ${site.url}, choose a useful non-duplicate audience question, then research it with Google.`,
               group: 'Automatic discovery'
             });
             Object.assign(topic, { autoDiscover: true, themes: config.themes || [], existingTitles: [...existing.map(item => item.title), ...articleTitles] });
             await this.store.put('topic', workspace, site.id, topic);
           }
-          const job = await this.startGeneration(workspace, topic.id);
-          job.automationGenerated = true; queuedJob = true;
+          job = await this.startGeneration(workspace, topic.id);
+          job.automationGenerated = true;
           await this.store.put('job', workspace, site.id, job);
           // Spread the target across a 30-day interval. No catch-up burst after downtime.
           config.nextRunAt = new Date(at.getTime() + 30 * 86400000 / site.monthlyVolume).toISOString();
@@ -137,27 +143,24 @@ export class Domain {
         } catch (error) {
           if (!(error instanceof AppError)) throw error;
           message = error.message;
+          blocked = error;
         }
-        if (queuedJob || config.message !== message) {
+        if (job || acknowledgedFailures || config.message !== message) {
           config.message = message; config.updatedAt = now();
           await this.store.put('site', workspace, site.id, site);
         }
+        return { site: this.safeSite(site), jobId: job?.id, blocked };
       }, workspace);
+      if (options.force) return result;
     }
   }
   async runAutomationNow(workspace, id, at = new Date()) {
     const site = await this.need('site', workspace, id);
     requireValue(site.automation?.enabled, 'Start automation before using Run now.', 409);
-    const failed = (await this.store.list('job', workspace, id)).filter(job => job.status === 'failed').map(job => job.id);
-    if (failed.length) {
-      site.automation.acknowledgedFailures = [...new Set([...(site.automation.acknowledgedFailures || []), ...failed])];
-      site.automation.message = 'Previous failure acknowledged. Starting a fresh article…';
-      site.automation.updatedAt = now();
-      await this.store.put('site', workspace, id, site);
-      await this.store.audit(workspace, id, 'generation.failures_acknowledged', id);
-    }
-    await this.automate(at, { workspace, siteId: id, force: true });
-    return this.safeSite(await this.need('site', workspace, id));
+    const result = await this.automate(at, { workspace, siteId: id, force: true });
+    requireValue(result, 'Start automation before using Run now.', 409);
+    if (result.blocked) throw result.blocked;
+    return { site: result.site, jobId: result.jobId };
   }
   async rotateKey(workspace, id) {
     const key = `ab_read_${randomBytes(32).toString('hex')}`;
@@ -351,7 +354,20 @@ export class Domain {
     try {
       const claimStarted = Date.now();
       console.log(`[worker] ${now()} job=${id} before claiming job`);
-      job = (await this.store.transaction(async () => { const j = (await this.need('job', workspace, id)); if (j.status !== 'queued') return null; const currentSite = await this.need('site', workspace, j.siteId); if (currentSite.generationPaused || (j.automationGenerated && !currentSite.automation?.enabled)) return null; j.status = 'running'; j.attempts = (j.attempts || 0) + 1; (await this.store.put('job', workspace, j.siteId, j)); return j; }, workspace));
+      job = await this.store.transaction(async () => {
+        const queued = await this.need('job', workspace, id);
+        if (queued.status !== 'queued') return null;
+        const currentSite = await this.need('site', workspace, queued.siteId);
+        if (currentSite.generationPaused || (queued.automationGenerated && !currentSite.automation?.enabled)) return null;
+        if (queued.automationGenerated) {
+          const jobs = await this.store.list('job', workspace, queued.siteId);
+          if (jobs.some(job => job.automationGenerated && job.status === 'running')) return null;
+        }
+        queued.status = 'running';
+        queued.attempts = (queued.attempts || 0) + 1;
+        await this.store.put('job', workspace, queued.siteId, queued);
+        return queued;
+      }, workspace);
       console.log(`[worker] ${now()} job=${id} after claiming job claimed=${!!job} elapsedMs=${Date.now() - claimStarted}`);
       if (!job) return;
       let topic = (await this.need('topic', workspace, job.topicId)); const site = { ...job.settings.site };
@@ -362,17 +378,24 @@ export class Domain {
       if (!job.research) {
         ensureTime(6 * 60000);
         (await checkpoint({ stage: 'research' }));
+        if (topic.autoDiscover) {
+          const topics = await this.store.list('topic', workspace, site.id);
+          topic.existingTitles = [...new Set([...(topic.existingTitles || []), ...topics.filter(item => item.id !== topic.id).map(item => item.title)])];
+        }
         const research = await time('AI research', () => this.provider.research(topic, site, job.settings.models.research));
         const researchUsage = (research.usages?.length ? research.usages : [research.usage]).filter(Boolean);
         (await checkpoint({ research, usage: [...job.usage, ...researchUsage.map((usage, index) => ({ stage: researchUsage.length > 1 ? `research ${index + 1}` : 'research', ...usage }))] }));
         if (topic.autoDiscover) {
           requireValue(research.selectedTopic, 'Website topic discovery returned an invalid topic. The job stopped before writing.');
           const normalized = research.selectedTopic.title.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
-          const topics = await this.store.list('topic', workspace, site.id);
-          requireValue(!topics.some(item => item.id !== topic.id && item.normalized === normalized), 'Website research selected a duplicate topic. The job stopped before writing.');
-          topic = { ...topic, ...research.selectedTopic, normalized, discoveredAt: now() };
-          await this.store.put('topic', workspace, site.id, topic);
-          await this.store.audit(workspace, site.id, 'topic.discovered', topic.id);
+          topic = await this.store.transaction(async () => {
+            const topics = await this.store.list('topic', workspace, site.id);
+            requireValue(!topics.some(item => item.id !== topic.id && item.normalized === normalized), 'Website research selected a duplicate topic. The job stopped before writing.');
+            const discovered = { ...topic, ...research.selectedTopic, normalized, discoveredAt: now() };
+            await this.store.put('topic', workspace, site.id, discovered);
+            await this.store.audit(workspace, site.id, 'topic.discovered', topic.id);
+            return discovered;
+          }, workspace);
           const specific = await this.knowledge.context(workspace, site.id, `${topic.title} ${topic.brief || ''}`);
           site.knowledgeContext = specific.passages.map(passage => `URL: ${passage.url}\nTitle: ${passage.title}\nFetched: ${passage.fetchedAt}\n${passage.text}`).join('\n\n---\n\n');
           await checkpoint({ websiteKnowledge: specific });

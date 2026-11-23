@@ -62,7 +62,7 @@ Queued topics take priority. Otherwise the grounded Gemini research pass inspect
 
 The worker checks every five seconds while Node runs. One job per website runs at a time, spaced at 30 days divided by the monthly target, with no catch-up burst. Budget, monthly unique-topic and review-capacity checks still apply. The Automation card reports missing setup, exhausted budget, failures and the next run. Failed jobs are not automatically retried: inspect Activity, fix the cause, and Resume (which acknowledges past failures). Retry the failed topic explicitly if needed. Pause prevents queued automated jobs and automated publication; an already-running paid job can finish. Published articles remain available.
 
-For testing, an active website's Automation card has a **Run now** button. It bypasses only the cadence timestamp and asks the normal automation pipeline to run immediately. Provider readiness, pauses, unresolved failures, active jobs, monthly volume, budget reservations, duplicate prevention, and review capacity still apply.
+Use **Generate article now** on the Websites page or **Run now** on the Automation card to queue one article per click. Manual requests can queue while another article is in progress and can run multiple times on the same day. The worker processes automated articles one at a time per website. Provider readiness, pauses, monthly volume, budget reservations, duplicate prevention, and review capacity still apply. A manual request acknowledges previous generation failures as if you clicked Resume.
 
 The website must consume the Delivery API to display published articles. This does not install frontend routes or render pages on the external website.
 

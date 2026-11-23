@@ -345,9 +345,9 @@ export async function createApp({ database = process.env.DATABASE_URL, origin = 
         if ((match = path.match(/^\/api\/sites\/([^/]+)\/automation$/)) && method === 'POST') return send(res, 200, { site: await domain.configureAutomation(workspace, match[1], await body(req)) });
         if ((match = path.match(/^\/api\/sites\/([^/]+)\/automation\/run$/)) && method === 'POST') {
           runLog('before queue transaction');
-          const site = await domain.runAutomationNow(workspace, match[1]);
+          const result = await domain.runAutomationNow(workspace, match[1]);
           runLog('after queue transaction');
-          return send(res, 202, { site });
+          return send(res, 202, result);
         }
         if ((match = path.match(/^\/api\/sites\/([^/]+)\/key$/)) && method === 'POST') return send(res, 200, await domain.rotateKey(workspace, match[1]));
         if ((match = path.match(/^\/api\/sites\/([^/]+)\/topics$/)) && method === 'POST') return send(res, 201, { topic: await domain.createTopic(workspace, match[1], await body(req)) });

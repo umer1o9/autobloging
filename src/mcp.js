@@ -97,9 +97,9 @@ export function createMcpEndpoint({ store, domain, origins, config = mcpConfigur
         const job = await domain.startGeneration(workspace, topicId);
         return { queued: true, jobId: job.id, status: job.status };
       }
-      const site = await domain.runAutomationNow(workspace, siteId);
+      const { site, jobId } = await domain.runAutomationNow(workspace, siteId);
       const jobs = (await store.list('job', workspace, siteId)).filter(j => ['queued', 'running'].includes(j.status));
-      return { site, jobs: jobs.map(j => ({ id: j.id, status: j.status, stage: j.stage })), message: 'Inspect jobs and the website automation message. Budget, volume and pause controls still apply.' };
+      return { site, jobId, jobs: jobs.map(j => ({ id: j.id, status: j.status, stage: j.stage })), message: 'Inspect jobs and the website automation message. Budget, volume and pause controls still apply.' };
     });
     register('resync_website', 'Queue a website knowledge resync. The worker performs the crawl separately.', { siteId: id }, true, async ({ siteId }) => { await need('site', siteId); return { knowledge: await domain.queueWebsiteSync(workspace, siteId) }; });
     register('set_generation_paused', 'Pause or resume new/queued article generation for this website. An already running job may finish.', { siteId: id, paused: z.boolean() }, true, async ({ siteId, paused }) => store.transaction(async () => {

@@ -53,15 +53,21 @@ test('hands-off discovery needs no themes and prepares safe internal links', asy
   assert.equal(prepared.approvedLinks.length, 3);
   assert.ok(prepared.approvedLinks.some(link => link.service));
 });
-test('manual run bypasses cadence but keeps normal admission safeguards', async t => {
-  const { domain, config, list } = await setup(t);
+test('manual clicks queue distinct same-day articles while an automatic run is outstanding', async t => {
+  const { domain, config, list, site } = await setup(t, { monthlyVolume: 3 });
   await config(); await domain.automate();
-  const first = (await list('job'))[0]; await domain.runJob('automation-test', first.id); await domain.automate();
-  assert.ok(new Date((await domain.need('site', 'automation-test', first.siteId)).automation.nextRunAt) > new Date());
-  await domain.runAutomationNow('automation-test', first.siteId);
-  assert.equal((await list('job')).length, 2);
-  await domain.runAutomationNow('automation-test', first.siteId);
-  assert.equal((await list('job')).length, 2);
+  const requestAt = new Date();
+  assert.ok(new Date((await domain.need('site', 'automation-test', site.id)).automation.nextRunAt) > requestAt);
+  const newRuns = await Promise.all([
+    domain.runAutomationNow('automation-test', site.id, requestAt),
+    domain.runAutomationNow('automation-test', site.id, requestAt)
+  ]);
+  const jobs = await list('job');
+  assert.equal(jobs.length, 3);
+  assert.equal(new Set(jobs.map(job => job.topicId)).size, 3);
+  assert.ok(newRuns.every(run => jobs.some(job => job.id === run.jobId && job.status === 'queued')));
+  await assert.rejects(domain.runAutomationNow('automation-test', site.id, requestAt), /Monthly generation target reached/);
+  assert.equal((await list('job')).length, 3);
 });
 test('manual run acknowledges inspected failures and queues a fresh article', async t => {
   const { domain, config, list, store, site } = await setup(t);

@@ -24,7 +24,7 @@ test('automation landing view renders setup, safely escapes site names, and open
   assert.match(app.innerHTML, /Content pipeline/);
   assert.match(app.innerHTML, /Website production/);
   assert.match(document.websitesHtml, /Generate article now/);
-  assert.match(document.websitesHtml, /Starts one article immediately/);
+  assert.match(document.websitesHtml, /Queues one article per click/);
   assert.match(document.activityHtml, /Date &amp; time/);
   assert.match(document.activityHtml, /Oct 22, 2026/);
   assert.match(document.activityHtml, /Finished 5:44 PM · Asia\/Karachi/);
