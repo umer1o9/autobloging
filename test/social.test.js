@@ -86,16 +86,21 @@ test('LinkedIn uses clickable article cards for profiles and Pages', async () =>
     return { status: 200, type: 'image/webp', body: cover };
   };
   const uploadUrl = 'https://www.linkedin.com/dms-uploads/example';
-  const pageImage = 'urn:li:image:image1';
-  for (const destination of ['', 'urn:li:organization:123']) {
-    const post = { destination, mediaUrl: 'https://cdn.example.com/cover.webp', title: 'Cover test', previewDescription: 'A short description', text: 'Read https://example.com/blog/cover', articleUrl: 'https://example.com/blog/cover' };
+  const thumbnail = 'urn:li:image:image1';
+  for (const { destination, hasCover } of [
+    { destination: '', hasCover: true },
+    { destination: 'urn:li:organization:123', hasCover: true },
+    { destination: '', hasCover: false }
+  ]) {
+    const author = destination || 'urn:li:person:member-1';
+    const post = { destination, mediaUrl: 'https://cdn.example.com/cover.webp', title: 'Cover test', previewDescription: 'A short description', text: 'Read this (guide) https://example.com/blog/cover #SaaS', articleUrl: 'https://example.com/blog/cover' };
     const calls = [];
     const request = async (url, options) => {
       calls.push(url);
       assert.equal(options.headers.Authorization, 'Bearer test-token');
       if (url.endsWith('=initializeUpload')) {
-        assert.equal(JSON.parse(options.body).initializeUploadRequest.owner, destination);
-        return Response.json({ value: { image: pageImage, uploadUrl } });
+        assert.equal(JSON.parse(options.body).initializeUploadRequest.owner, author);
+        return Response.json({ value: { image: thumbnail, uploadUrl } });
       }
       if (url === uploadUrl) {
         assert.equal(options.method, 'PUT');
@@ -104,8 +109,14 @@ test('LinkedIn uses clickable article cards for profiles and Pages', async () =>
         return new Response(null, { status: 201 });
       }
       const body = JSON.parse(options.body);
-      if (destination) assert.deepEqual(body.content.article, { source: post.articleUrl, title: post.title, description: post.previewDescription, thumbnail: pageImage });
-      else {
+      assert.equal(body.author, author);
+      if (hasCover) {
+        assert.equal(url, 'https://api.linkedin.com/rest/posts');
+        assert.ok(options.headers['LinkedIn-Version']);
+        assert.deepEqual(body.content.article, { source: post.articleUrl, title: post.title, description: post.previewDescription, thumbnail });
+        assert.equal(body.commentary, String.raw`Read this \(guide\) https://example.com/blog/cover #SaaS`);
+      } else {
+        assert.equal(url, 'https://api.linkedin.com/v2/ugcPosts');
         const share = body.specificContent['com.linkedin.ugc.ShareContent'];
         assert.equal(share.shareMediaCategory, 'ARTICLE');
         assert.deepEqual(share.media, [{
@@ -116,8 +127,8 @@ test('LinkedIn uses clickable article cards for profiles and Pages', async () =>
       }
       return new Response(null, { status: 201, headers: { 'x-restli-id': 'urn:li:ugcPost:123' } });
     };
-    const coverId = destination ? await uploadLinkedInCover(account, post, download, request) : 'urn:li:digitalmediaAsset:legacy';
+    const coverId = hasCover ? await uploadLinkedInCover(account, post, download, request) : '';
     assert.equal((await publishLinkedIn(account, { ...post, coverId }, request)).id, 'urn:li:ugcPost:123');
-    assert.equal(calls.length, destination ? 3 : 1);
+    assert.equal(calls.length, hasCover ? 3 : 1);
   }
 });

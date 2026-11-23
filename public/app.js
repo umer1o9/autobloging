@@ -275,7 +275,7 @@ function socialPostDialog(siteId, post) {
       ${post.mediaUrl ? `<img src="${e(post.mediaUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ''}
       <span><strong>${e(post.title)}</strong><small>${e(new URL(post.articleUrl).hostname)}</small>${post.previewDescription ? `<small>${e(post.previewDescription)}</small>` : ''}</span>
     </a>
-    ${post.destination ? '' : '<p class="help">LinkedIn uses the public article’s metadata to render the card on your profile.</p>'}
+    <p class="help">The cover is sent as the link card’s thumbnail. LinkedIn controls which preview details appear in the feed.</p>
   </section>` : '';
   const queue = ['facebook', 'linkedin'].includes(post.platform) && ['draft', 'needs_attention'].includes(post.status)
     ? '<label><input type="checkbox" name="queue"> Queue this post if the article is published</label>' : '';

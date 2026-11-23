@@ -80,6 +80,11 @@ export async function linkedinPages(account, request = fetch) {
 }
 
 const memberHeaders = token => ({ Authorization: 'Bearer ' + token, 'Content-Type': 'application/json', 'X-Restli-Protocol-Version': '2.0.0' });
+const linkedInAuthor = (account, post) => post.destination || 'urn:li:person:' + account.memberId;
+const littleText = text => text.replace(
+  /(^|\s)(#[\p{L}\p{N}\p{M}_]+)|[\\|{}@\[\]()<>#*_~]/gu,
+  (match, _spacing, hashtag) => hashtag ? match : '\\' + match
+);
 const coverError = (message, retryable = false) => Object.assign(new Error(message), { retryable, setup: !retryable });
 const coverTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
 
@@ -123,7 +128,7 @@ export async function uploadLinkedInCover(account, post, download = fetchWebsite
   };
   const registration = await coverRequest('https://api.linkedin.com/rest/images?action=initializeUpload', {
     method: 'POST', headers: pageHeaders(account.token),
-    body: JSON.stringify({ initializeUploadRequest: { owner: post.destination } })
+    body: JSON.stringify({ initializeUploadRequest: { owner: linkedInAuthor(account, post) } })
   });
   const value = (await registration.json().catch(() => null))?.value;
   const coverId = value?.image;
@@ -140,21 +145,23 @@ export async function uploadLinkedInCover(account, post, download = fetchWebsite
 export async function publishLinkedIn(account, post, request = fetch) {
   const page = post.destination;
   if (page && (!/^urn:li:organization:\d+$/.test(page) || !account.pageAccess)) throw Object.assign(new Error('Reconnect LinkedIn with approved Page publishing access.'), { setup: true });
+  const author = linkedInAuthor(account, post);
+  const versioned = !!(page || post.coverId);
   const article = { source: post.articleUrl, title: post.title };
   if (post.previewDescription) article.description = post.previewDescription;
   if (post.coverId) article.thumbnail = post.coverId;
   const memberArticle = { status: 'READY', originalUrl: post.articleUrl, title: { text: post.title } };
   if (post.previewDescription) memberArticle.description = { text: post.previewDescription };
-  const response = await request(page ? 'https://api.linkedin.com/rest/posts' : 'https://api.linkedin.com/v2/ugcPosts', {
+  const response = await request(versioned ? 'https://api.linkedin.com/rest/posts' : 'https://api.linkedin.com/v2/ugcPosts', {
     method: 'POST', redirect: 'error', signal: AbortSignal.timeout(15000),
-    headers: page ? pageHeaders(account.token) : memberHeaders(account.token),
-    body: JSON.stringify(page ? {
-      author: page, commentary: post.text, visibility: 'PUBLIC',
+    headers: versioned ? pageHeaders(account.token) : memberHeaders(account.token),
+    body: JSON.stringify(versioned ? {
+      author, commentary: littleText(post.text), visibility: 'PUBLIC',
       distribution: { feedDistribution: 'MAIN_FEED', targetEntities: [], thirdPartyDistributionChannels: [] },
       content: { article },
       lifecycleState: 'PUBLISHED', isReshareDisabledByAuthor: false
     } : {
-      author: 'urn:li:person:' + account.memberId,
+      author,
       lifecycleState: 'PUBLISHED',
       specificContent: { 'com.linkedin.ugc.ShareContent': {
         shareCommentary: { text: post.text }, shareMediaCategory: 'ARTICLE', media: [memberArticle]
@@ -163,7 +170,9 @@ export async function publishLinkedIn(account, post, request = fetch) {
     })
   });
   if (response.status === 429) throw Object.assign(new Error('LinkedIn rate limit reached. The worker will retry.'), { retryable: true });
-  if (response.status !== 201) throw Object.assign(new Error('LinkedIn rejected the post. Check your connection and posting permissions.'), { rejected: [400, 401, 403, 404, 422].includes(response.status) });
+  if (response.status !== 201) throw Object.assign(new Error(post.coverId && response.status === 403
+    ? 'LinkedIn denied access to publishing this article preview. Check the connected app’s Posts API permissions.'
+    : 'LinkedIn rejected the post. Check your connection and posting permissions.'), { rejected: [400, 401, 403, 404, 422, 426].includes(response.status) });
   const id = response.headers.get('x-restli-id');
   if (!id || !/^urn:li:(share|ugcPost):\d+$/.test(id)) return {};
   return { id, postIds: [{ platform: 'linkedin', status: 'success', id, postUrl: 'https://www.linkedin.com/feed/update/' + id + '/' }] };

@@ -240,12 +240,21 @@ export class SocialPublishing {
       }
       if (!this.supports(post.platform) || !fingerprint || post.profileFingerprint !== fingerprint) return await update('needs_attention', { error: 'The social account connection changed or expired. Review the post before sending.' });
       let live = false;
+      let mediaUrl = post.mediaUrl;
+      let previewDescription = post.previewDescription;
       try {
         const page = await this.fetch(post.articleUrl, new URL(site.url).origin, { timeout: 6000, maxBytes: 1048576 });
         if (page.status === 200 && /html/.test(page.type)) {
           const html = load(page.body);
           const title = plain(post.title).toLowerCase();
           live = html('h1').toArray().some(element => plain(html(element).text()).toLowerCase() === title);
+          if (live && post.platform === 'linkedin') {
+            const previewImage = html('meta[property="og:image"]').first().attr('content');
+            if (!mediaUrl && !post.destination && previewImage) {
+              mediaUrl = httpsUrl(URL.parse(previewImage, page.url || post.articleUrl)?.href);
+            }
+            previewDescription ||= clip(plain(html('meta[property="og:description"]').first().attr('content')), 256);
+          }
         }
       } catch { /* The receiving website may still be deploying the article. */ }
       if (!live) {
@@ -254,7 +263,7 @@ export class SocialPublishing {
       }
       if (!this.store.workerActive) return;
       const linkedIn = post.platform === 'linkedin' ? linkedinConnection(site) : null;
-      const coverId = linkedIn && post.destination && post.mediaUrl ? await uploadLinkedInCover(linkedIn, post, this.fetch) : '';
+      const coverId = linkedIn && mediaUrl ? await uploadLinkedInCover(linkedIn, { ...post, mediaUrl }, this.fetch) : '';
       if (!this.store.workerActive) return;
       const claimed = await this.store.transaction(async () => {
         const [row] = await this.store.query('SELECT payload FROM social_posts WHERE workspace_id=? AND id=?', [workspace, post.id]);
@@ -269,7 +278,7 @@ export class SocialPublishing {
       if (!this.store.workerActive) return await update('queued', { nextAt: time() });
       submitted = true;
       const result = post.platform === 'linkedin'
-        ? await publishLinkedIn(linkedIn, { ...post, coverId })
+        ? await publishLinkedIn(linkedIn, { ...post, coverId, previewDescription })
         : await this.provider.publish(post.siteId, { post: post.text, platforms: [post.platform], articleUrl: post.articleUrl }, this.facebookCredentials(site));
       const detail = result.postIds?.find(item => item.platform === post.platform);
       const providerId = typeof result.id === 'string' ? result.id : post.providerId;
