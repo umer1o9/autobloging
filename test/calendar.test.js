@@ -59,6 +59,23 @@ test('grid starts Monday, includes leap day and handles year boundaries', async 
   assert.equal(api.validDate('2026-02-30'), false);
 });
 
+test('calendar keeps weekday alignment without showing dates or articles from neighboring months', async () => {
+  const records = fixtures();
+  for (const [id, date, title] of [
+    ['first', '2026-09-30', 'Previous month article'],
+    ['last', '2026-11-01', 'Next month article']
+  ]) {
+    records.articles.push({ id, siteId: 's1', title, status: 'draft', createdAt: date + 'T12:00:00Z' });
+  }
+  const { api, app } = await harness({ records });
+  for (const html of [app.innerHTML, api.calendar()]) {
+    assert.match(html, /outside-month" aria-hidden="true"/);
+    assert.match(html, /datetime="2026-10-01"/);
+    assert.match(html, /datetime="2026-10-31"/);
+    assert.doesNotMatch(html, /datetime="2026-(09|11)-|Previous month article|Next month article/);
+  }
+});
+
 test('website summary, status labels, escaped titles and counts render in shared box calendar', async () => {
   const { api, app } = await harness();
   assert.match(app.innerHTML, /month-grid/);
