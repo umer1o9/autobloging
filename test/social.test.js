@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import sharp from 'sharp';
 import { Domain } from '../src/domain.js';
+import { publishLinkedIn, uploadLinkedInCover } from '../src/linkedin.js';
 import { SocialPublishing } from '../src/social.js';
 import { createSocialProvider } from '../src/social-provider.js';
 import { testDatabase } from './mysql-helper.js';
@@ -22,7 +24,7 @@ test('social jobs wait for the public blog, publish once per destination, and pr
     sent.push(Object.fromEntries(request.body));
     return Response.json({ id: '123_456' });
   });
-  const content = validArticle();
+  const content = validArticle({ coverImage: { url: 'https://example.org/cover.webp', alt: 'Publishing workflow' } });
   domain.social = new SocialPublishing(store, { provider, fetch: async () => ({ status: 200, type: 'text/html', body: `<h1>${live ? content.title : 'Blog home'}</h1>` }) });
   await assert.rejects(domain.social.configure(workspace, site, { platforms: ['facebook'], path: '//example.org/{slug}' }), { status: 400 });
   await domain.social.configure(workspace, site, { platforms: destinations, path: '/blog/{slug}.html', subreddit: 'permitted_sub', enabled: true });
@@ -33,6 +35,12 @@ test('social jobs wait for the public blog, publish once per destination, and pr
   const article = await domain.saveArticle(workspace, draft.id, { revision: draft.revision, content });
   assert.equal((await view()).length, 6);
   assert.ok((await view()).every(p => p.status === 'draft' && !('profileFingerprint' in p)));
+  const { linkedin } = await byPlatform();
+  assert.match(linkedin.text, /^How does a reviewed publishing workflow work\?\n\n/);
+  assert.match(linkedin.text, /• What should reviewers check\?/);
+  assert.match(linkedin.text, /Who reviews\?\n\nRead the full article\nhttps:\/\/example\.com\/blog\//);
+  assert.match(linkedin.text, /#PublishingWorkflow\b/);
+  assert.equal(linkedin.mediaUrl, content.coverImage.url);
   const ytDraft = (await byPlatform()).youtube;
   await assert.rejects(domain.social.edit(workspace, 'other-site', ytDraft.id, { text: 'Video description' }), { status: 404 });
   await domain.social.edit(workspace, site.id, ytDraft.id, { text: 'Video description', mediaUrl: 'https://example.org/article.mp4' });
@@ -67,4 +75,51 @@ test('social jobs wait for the public blog, publish once per destination, and pr
   await domain.social.run();
   assert.equal((await byPlatform()).instagram.status, 'cancelled');
   assert.equal(sent.length, 1);
+});
+
+test('LinkedIn uploads a WebP cover as JPEG and includes its asset in the profile post or Page card', async () => {
+  const cover = await sharp({ create: { width: 24, height: 12, channels: 3, background: 'teal' } }).webp().toBuffer();
+  const account = { memberId: 'member-1', token: 'test-token', pageAccess: true };
+  const download = async (url, origin) => {
+    assert.equal(url, 'https://cdn.example.com/cover.webp');
+    assert.equal(origin, 'https://cdn.example.com');
+    return { status: 200, type: 'image/webp', body: cover };
+  };
+  const uploadUrl = 'https://www.linkedin.com/dms-uploads/example';
+  const memberAsset = 'urn:li:digitalmediaAsset:asset1';
+  const pageImage = 'urn:li:image:image1';
+  for (const destination of ['', 'urn:li:organization:123']) {
+    const post = { destination, mediaUrl: 'https://cdn.example.com/cover.webp', title: 'Cover test', text: 'Read https://example.com/blog/cover', articleUrl: 'https://example.com/blog/cover' };
+    const calls = [];
+    const request = async (url, options) => {
+      calls.push(url);
+      assert.equal(options.headers.Authorization, 'Bearer test-token');
+      if (url.endsWith('=registerUpload')) {
+        assert.equal(JSON.parse(options.body).registerUploadRequest.owner, 'urn:li:person:member-1');
+        return Response.json({ value: { asset: memberAsset, uploadMechanism: { 'com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest': { uploadUrl } } } });
+      }
+      if (url.endsWith('=initializeUpload')) {
+        assert.equal(JSON.parse(options.body).initializeUploadRequest.owner, destination);
+        return Response.json({ value: { image: pageImage, uploadUrl } });
+      }
+      if (url === uploadUrl) {
+        assert.equal(options.method, 'PUT');
+        assert.equal(options.redirect, 'error');
+        assert.equal((await sharp(options.body).metadata()).format, 'jpeg');
+        return new Response(null, { status: 201 });
+      }
+      const body = JSON.parse(options.body);
+      if (destination) assert.deepEqual(body.content.article, { source: post.articleUrl, title: post.title, thumbnail: pageImage });
+      else {
+        const share = body.specificContent['com.linkedin.ugc.ShareContent'];
+        assert.equal(share.shareMediaCategory, 'IMAGE');
+        assert.equal(share.media[0].media, memberAsset);
+        assert.equal(share.shareCommentary.text, post.text);
+      }
+      return new Response(null, { status: 201, headers: { 'x-restli-id': 'urn:li:ugcPost:123' } });
+    };
+    const coverId = await uploadLinkedInCover(account, post, download, request);
+    assert.equal((await publishLinkedIn(account, { ...post, coverId }, request)).id, 'urn:li:ugcPost:123');
+    assert.equal(calls.length, 3);
+  }
 });

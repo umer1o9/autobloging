@@ -23,7 +23,7 @@ export function crawlUrl(value, base) {
   } catch { return null; }
 }
 // Pin the checked DNS result to the actual socket. Redirects are checked again.
-export async function fetchWebsite(value, origin, { resolve = lookup, timeout = 15000, maxBytes = 1048576, allowed = () => true } = {}) {
+export async function fetchWebsite(value, origin, { resolve = lookup, timeout = 15000, maxBytes = 1048576, allowed = () => true, accept = 'text/html,application/xhtml+xml,application/xml,text/xml,text/plain' } = {}) {
   const until = Date.now() + timeout;
   let url = crawlUrl(value, origin);
   if (!url) throw new Error('URL is outside the website or uses an unsupported port/protocol.');
@@ -35,11 +35,11 @@ export async function fetchWebsite(value, origin, { resolve = lookup, timeout = 
     const selected = records[0];
     const response = await new Promise((accept, reject) => {
       const req = (target.protocol === 'https:' ? httpsRequest : httpRequest)(target, {
-        method: 'GET', agent: false, headers: { 'User-Agent': `${CRAWLER_AGENT}/1.0`, Accept: 'text/html,application/xhtml+xml,application/xml,text/xml,text/plain', 'Accept-Encoding': 'identity' },
+        method: 'GET', agent: false, headers: { 'User-Agent': `${CRAWLER_AGENT}/1.0`, Accept: accept, 'Accept-Encoding': 'identity' },
         lookup: (_host, options, callback) => options.all ? callback(null, [selected]) : callback(null, selected.address, selected.family)
       }, res => {
         let size = 0; const chunks = [];
-        res.on('data', chunk => { size += chunk.length; if (size > maxBytes) req.destroy(new Error('Page exceeds the 1 MB download limit.')); else chunks.push(chunk); });
+        res.on('data', chunk => { size += chunk.length; if (size > maxBytes) req.destroy(new Error('Response exceeds the download limit.')); else chunks.push(chunk); });
         res.on('error', reject);
         res.on('end', () => accept({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) }));
       });

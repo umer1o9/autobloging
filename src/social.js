@@ -1,4 +1,4 @@
-import { linkedinConnection, linkedinFingerprint, linkedinDestinations, linkedinTargetSelected, publishLinkedIn } from './linkedin.js';
+import { linkedinConnection, linkedinFingerprint, linkedinDestinations, linkedinTargetSelected, publishLinkedIn, uploadLinkedInCover } from './linkedin.js';
 import { randomUUID } from 'node:crypto';
 import { load } from 'cheerio';
 import { createSocialProvider } from './social-provider.js';
@@ -13,6 +13,31 @@ const problem = (status, message) => Object.assign(new Error(message), { status 
 const plain = value => String(value || '').replace(/\s+/g, ' ').trim();
 const clip = (value, limit) => Array.from(value).slice(0, limit).join('');
 const httpsUrl = value => { const url = httpUrl(value); return url?.startsWith('https://') ? url : ''; };
+
+function linkedinCaption(content, articleUrl) {
+  const unique = lines => [...new Map(lines.filter(Boolean).map(line => [line.toLowerCase(), line])).values()];
+  const questions = unique((content.faqs || []).map(item => plain(item.question))).slice(0, 2)
+    .map(question => clip(question, 149).replace(/[.!?…]+$/, '') + '?');
+  const title = plain(content.title);
+  const lead = title.endsWith('?') ? title : questions.shift() || title;
+  const summary = clip(plain(content.excerpt || content.directAnswer || content.metaDescription), 400);
+  const keyword = plain(content.primaryKeyword);
+  const keywordLine = keyword && ![lead, title, summary].join(' ').toLowerCase().includes(keyword.toLowerCase())
+    ? 'This guide covers ' + clip(keyword, 100) + '.' : '';
+  const takeaways = unique((content.sections || []).map(section => plain(section.heading))).slice(0, 3)
+    .map(heading => '• ' + clip(heading, 110));
+  const tags = unique([keyword, ...(content.tags || []), content.category].map(tag =>
+    (plain(tag).match(/[\p{L}\p{N}]+/gu) || []).map(word => word[0].toUpperCase() + word.slice(1)).join('')
+  ).filter(tag => tag.length <= 48 && /\p{L}/u.test(tag))).slice(0, 5).map(tag => '#' + tag);
+  return [
+    lead,
+    [lead !== title ? title : '', summary, keywordLine].filter(Boolean).join('\n'),
+    takeaways.length ? ['In the guide', ...takeaways].join('\n') : '',
+    questions.find(question => question.toLowerCase() !== lead.toLowerCase()) || 'What has worked for your team?',
+    'Read the full article\n' + articleUrl,
+    tags.join(' ')
+  ].filter(Boolean).join('\n\n');
+}
 
 export class SocialPublishing {
   constructor(store, { provider = createSocialProvider(), fetch = fetchWebsite } = {}) {
@@ -113,7 +138,7 @@ export class SocialPublishing {
     const hooks = {
       facebook: [title, clip(summary, 360), `Read the article: ${articleUrl}`],
       instagram: [title, clip(summary, 550), `Full article on ${new URL(site.url).hostname}.`],
-      linkedin: [title, clip(summary, 650), `Read the full article: ${articleUrl}`],
+      linkedin: [linkedinCaption(article.content, articleUrl)],
       reddit: [clip(summary, 700), `Source and full article: ${articleUrl}`],
       tiktok: [clip(summary, 140), `Full article on ${new URL(site.url).hostname}.`],
       youtube: [clip(summary, 700), `Read the full article: ${articleUrl}`]
@@ -129,7 +154,7 @@ export class SocialPublishing {
         id: previous?.id || randomUUID(), siteId: site.id, articleId: article.id, platform, destination, destinationName: platform === 'linkedin' ? (destination ? site.linkedinPages?.find(page => page.id === destination)?.name || destination : linkedinConnection(site)?.name || 'Personal profile') : '', title, articleUrl,
         text: edited ? previous.text : hooks[platform].filter(Boolean).join('\n\n'),
         edited,
-        mediaUrl: edited ? previous.mediaUrl : (['instagram', 'tiktok'].includes(platform) ? httpsUrl(article.content.coverImage?.url) : ''),
+        mediaUrl: edited ? previous.mediaUrl : (['instagram', 'tiktok', 'linkedin'].includes(platform) ? httpsUrl(article.content.coverImage?.url) : ''),
         status: release ? 'queued' : publish && (!this.supports(platform) || (platform === 'linkedin' && !site.linkedinConnection)) ? 'manual' : 'draft', nextAt: time(), attempts: 0,
         revision: article.revision,
         profileFingerprint: release ? this.fingerprint(site, platform, destination) : null,
@@ -226,6 +251,9 @@ export class SocialPublishing {
         return await update(attempts < 12 ? 'queued' : 'needs_attention', { attempts, nextAt: after(5 * 60000), error: 'Waiting for the article URL to return a page with the article title as its main heading.' });
       }
       if (!this.store.workerActive) return;
+      const linkedIn = post.platform === 'linkedin' ? linkedinConnection(site) : null;
+      const coverId = linkedIn && post.mediaUrl ? await uploadLinkedInCover(linkedIn, post, this.fetch) : '';
+      if (!this.store.workerActive) return;
       const claimed = await this.store.transaction(async () => {
         const [row] = await this.store.query('SELECT payload FROM social_posts WHERE workspace_id=? AND id=?', [workspace, post.id]);
         const latest = row && parse(row.payload);
@@ -238,7 +266,9 @@ export class SocialPublishing {
       if (!claimed) return;
       if (!this.store.workerActive) return await update('queued', { nextAt: time() });
       submitted = true;
-      const result = post.platform === 'linkedin' ? await publishLinkedIn(linkedinConnection(site), post) : await this.provider.publish(post.siteId, { post: post.text, platforms: [post.platform], articleUrl: post.articleUrl }, this.facebookCredentials(site));
+      const result = post.platform === 'linkedin'
+        ? await publishLinkedIn(linkedIn, { ...post, coverId })
+        : await this.provider.publish(post.siteId, { post: post.text, platforms: [post.platform], articleUrl: post.articleUrl }, this.facebookCredentials(site));
       const detail = result.postIds?.find(item => item.platform === post.platform);
       const providerId = typeof result.id === 'string' ? result.id : post.providerId;
       if (detail?.status === 'success' && detail.id && !['pending', 'failed'].includes(detail.id)) {
