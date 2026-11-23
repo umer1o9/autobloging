@@ -265,8 +265,27 @@ async function socialDialog(siteId, linked) {
 }
 function socialPostDialog(siteId, post) {
   const editable = ['draft', 'needs_attention', 'manual'].includes(post.status);
-  const mediaLabel = { youtube: 'Public HTTPS video URL', linkedin: 'LinkedIn cover image URL' }[post.platform] || 'Public HTTPS media URL';
-  openDialog(socialLabels[post.platform] + (post.destinationName ? ' · ' + post.destinationName : '') + ' post', `<p><strong>${e(post.title)}</strong></p><p>${e(post.status.replaceAll('_', ' '))}${post.error ? ` · ${e(post.error)}` : ''}</p><p><a href="${e(post.articleUrl)}" target="_blank" rel="noopener noreferrer">Open public article URL</a></p>${editable ? `<form id="social-post-form" data-site="${e(siteId)}" data-id="${e(post.id)}">${area('Post text', 'text', post.text)}${field(mediaLabel, 'mediaUrl', post.mediaUrl, 'url')}${['facebook', 'linkedin'].includes(post.platform) && ['draft', 'needs_attention'].includes(post.status) ? '<label><input type="checkbox" name="queue"> Queue this post if the article is published</label>' : ''}<div class="dialog-foot">${btn('social', 'Back to social publishing', siteId)}${btn('social-copy', 'Copy post text', post.id)}<button class="primary" type="submit">Save post</button></div></form>` : `<pre>${e(post.text)}</pre>${post.mediaUrl ? `<p><a href="${e(post.mediaUrl)}" target="_blank" rel="noopener noreferrer">Open post media</a></p>` : ''}<div class="dialog-foot">${btn('social', 'Back to social publishing', siteId)}${btn('social-copy', 'Copy post text', post.id)}</div>`}`, true);
+  const linkedin = post.platform === 'linkedin';
+  const mediaLabel = { youtube: 'Public HTTPS video URL', linkedin: 'Link preview thumbnail URL' }[post.platform] || 'Public HTTPS media URL';
+  const media = !linkedin || post.destination ? field(mediaLabel, 'mediaUrl', post.mediaUrl, 'url') : '';
+  const articleLink = `<p><a href="${e(post.articleUrl)}" target="_blank" rel="noopener noreferrer">Open public article URL</a></p>`;
+  const preview = linkedin && editable ? `<section class="linkedin-preview" aria-label="LinkedIn link preview">
+    <h3>Link preview</h3>
+    <a class="linkedin-preview-card" href="${e(post.articleUrl)}" target="_blank" rel="noopener noreferrer">
+      ${post.mediaUrl ? `<img src="${e(post.mediaUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ''}
+      <span><strong>${e(post.title)}</strong><small>${e(new URL(post.articleUrl).hostname)}</small>${post.previewDescription ? `<small>${e(post.previewDescription)}</small>` : ''}</span>
+    </a>
+    ${post.destination ? '' : '<p class="help">LinkedIn uses the public article’s metadata to render the card on your profile.</p>'}
+  </section>` : '';
+  const queue = ['facebook', 'linkedin'].includes(post.platform) && ['draft', 'needs_attention'].includes(post.status)
+    ? '<label><input type="checkbox" name="queue"> Queue this post if the article is published</label>' : '';
+  const actions = btn('social', 'Back to social publishing', siteId) + btn('social-copy', 'Copy post text', post.id);
+  const content = editable ? `<form id="social-post-form" data-site="${e(siteId)}" data-id="${e(post.id)}">
+    ${area('Post text', 'text', post.text)}${preview}${media}${queue}
+    <div class="dialog-foot">${actions}<button class="primary" type="submit">Save post</button></div>
+  </form>` : `<pre>${e(post.text)}</pre>${post.mediaUrl ? `<p><a href="${e(post.mediaUrl)}" target="_blank" rel="noopener noreferrer">Open post media</a></p>` : ''}<div class="dialog-foot">${actions}</div>`;
+  openDialog(socialLabels[post.platform] + (post.destinationName ? ' · ' + post.destinationName : '') + ' post',
+    `<p><strong>${e(post.title)}</strong></p><p>${e(post.status.replaceAll('_', ' '))}${post.error ? ` · ${e(post.error)}` : ''}</p>${preview ? '' : articleLink}${content}`, true);
 }
 function websites() {
   const site = data.sites.find(item => item.id === selectedSite);

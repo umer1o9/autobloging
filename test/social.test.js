@@ -77,7 +77,7 @@ test('social jobs wait for the public blog, publish once per destination, and pr
   assert.equal(sent.length, 1);
 });
 
-test('LinkedIn uploads a WebP cover as JPEG and includes its asset in the profile post or Page card', async () => {
+test('LinkedIn uses clickable article cards for profiles and Pages', async () => {
   const cover = await sharp({ create: { width: 24, height: 12, channels: 3, background: 'teal' } }).webp().toBuffer();
   const account = { memberId: 'member-1', token: 'test-token', pageAccess: true };
   const download = async (url, origin) => {
@@ -86,18 +86,13 @@ test('LinkedIn uploads a WebP cover as JPEG and includes its asset in the profil
     return { status: 200, type: 'image/webp', body: cover };
   };
   const uploadUrl = 'https://www.linkedin.com/dms-uploads/example';
-  const memberAsset = 'urn:li:digitalmediaAsset:asset1';
   const pageImage = 'urn:li:image:image1';
   for (const destination of ['', 'urn:li:organization:123']) {
-    const post = { destination, mediaUrl: 'https://cdn.example.com/cover.webp', title: 'Cover test', text: 'Read https://example.com/blog/cover', articleUrl: 'https://example.com/blog/cover' };
+    const post = { destination, mediaUrl: 'https://cdn.example.com/cover.webp', title: 'Cover test', previewDescription: 'A short description', text: 'Read https://example.com/blog/cover', articleUrl: 'https://example.com/blog/cover' };
     const calls = [];
     const request = async (url, options) => {
       calls.push(url);
       assert.equal(options.headers.Authorization, 'Bearer test-token');
-      if (url.endsWith('=registerUpload')) {
-        assert.equal(JSON.parse(options.body).registerUploadRequest.owner, 'urn:li:person:member-1');
-        return Response.json({ value: { asset: memberAsset, uploadMechanism: { 'com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest': { uploadUrl } } } });
-      }
       if (url.endsWith('=initializeUpload')) {
         assert.equal(JSON.parse(options.body).initializeUploadRequest.owner, destination);
         return Response.json({ value: { image: pageImage, uploadUrl } });
@@ -109,17 +104,20 @@ test('LinkedIn uploads a WebP cover as JPEG and includes its asset in the profil
         return new Response(null, { status: 201 });
       }
       const body = JSON.parse(options.body);
-      if (destination) assert.deepEqual(body.content.article, { source: post.articleUrl, title: post.title, thumbnail: pageImage });
+      if (destination) assert.deepEqual(body.content.article, { source: post.articleUrl, title: post.title, description: post.previewDescription, thumbnail: pageImage });
       else {
         const share = body.specificContent['com.linkedin.ugc.ShareContent'];
-        assert.equal(share.shareMediaCategory, 'IMAGE');
-        assert.equal(share.media[0].media, memberAsset);
+        assert.equal(share.shareMediaCategory, 'ARTICLE');
+        assert.deepEqual(share.media, [{
+          status: 'READY', originalUrl: post.articleUrl, title: { text: post.title },
+          description: { text: post.previewDescription }
+        }]);
         assert.equal(share.shareCommentary.text, post.text);
       }
       return new Response(null, { status: 201, headers: { 'x-restli-id': 'urn:li:ugcPost:123' } });
     };
-    const coverId = await uploadLinkedInCover(account, post, download, request);
+    const coverId = destination ? await uploadLinkedInCover(account, post, download, request) : 'urn:li:digitalmediaAsset:legacy';
     assert.equal((await publishLinkedIn(account, { ...post, coverId }, request)).id, 'urn:li:ugcPost:123');
-    assert.equal(calls.length, 3);
+    assert.equal(calls.length, destination ? 3 : 1);
   }
 });

@@ -85,3 +85,25 @@ test('unpublish works from library and reader without a review dialog', async ()
     assert.equal(modal.open, false);
   }
 });
+
+test('LinkedIn profile draft shows a clickable article preview while editing the caption', async () => {
+  const app = { innerHTML: '' };
+  const modal = { open: false, classList: { add() {}, remove() {} }, showModal() { this.open = true; } };
+  const document = { querySelector: selector => selector === '#app' ? app : modal, addEventListener() {} };
+  const post = {
+    id: 'post-test', platform: 'linkedin', status: 'draft', title: 'Article <title>',
+    articleUrl: 'https://example.com/blog/article', mediaUrl: 'https://example.com/cover.jpg',
+    previewDescription: 'A short summary.', text: 'A question for your team?'
+  };
+  const script = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  await runInNewContext(`(async () => { ${script}\nsocialPostDialog('site-test', post); })()`, {
+    document, post, URL, Intl, console,
+    fetch: async () => ({ ok: true, json: async () => ({ user: { name: 'Test' }, sites: [], articles: [], topics: [], jobs: [], provider: { ready: false, models: {} } }) }),
+    setInterval: () => 1, clearInterval() {}
+  });
+  assert.match(modal.innerHTML, /Link preview/);
+  assert.match(modal.innerHTML, /class="linkedin-preview-card" href="https:\/\/example\.com\/blog\/article"/);
+  assert.match(modal.innerHTML, /Article &lt;title&gt;/);
+  assert.match(modal.innerHTML, /A short summary\./);
+  assert.doesNotMatch(modal.innerHTML, /name="mediaUrl"/);
+});

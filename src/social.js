@@ -153,6 +153,7 @@ export class SocialPublishing {
       const post = {
         id: previous?.id || randomUUID(), siteId: site.id, articleId: article.id, platform, destination, destinationName: platform === 'linkedin' ? (destination ? site.linkedinPages?.find(page => page.id === destination)?.name || destination : linkedinConnection(site)?.name || 'Personal profile') : '', title, articleUrl,
         text: edited ? previous.text : hooks[platform].filter(Boolean).join('\n\n'),
+        ...(platform === 'linkedin' ? { previewDescription: clip(summary, 256) } : {}),
         edited,
         mediaUrl: edited ? previous.mediaUrl : (['instagram', 'tiktok', 'linkedin'].includes(platform) ? httpsUrl(article.content.coverImage?.url) : ''),
         status: release ? 'queued' : publish && (!this.supports(platform) || (platform === 'linkedin' && !site.linkedinConnection)) ? 'manual' : 'draft', nextAt: time(), attempts: 0,
@@ -175,7 +176,8 @@ export class SocialPublishing {
       const text = String(input.text || '').trim();
       const max = post.platform === 'tiktok' ? 220 : 2000;
       if (!text || Array.from(text).length > max) throw problem(400, `Use between 1 and ${max} characters.`);
-      const mediaUrl = httpsUrl(String(input.mediaUrl || '').trim());
+      const mediaUrl = input.mediaUrl === undefined && post.platform === 'linkedin' && !post.destination
+        ? post.mediaUrl || '' : httpsUrl(String(input.mediaUrl || '').trim());
       if (input.mediaUrl && !mediaUrl) throw problem(400, 'Use a public HTTPS media URL.');
       Object.assign(post, { text, mediaUrl, edited: true });
       if (input.queue === true) {
@@ -252,7 +254,7 @@ export class SocialPublishing {
       }
       if (!this.store.workerActive) return;
       const linkedIn = post.platform === 'linkedin' ? linkedinConnection(site) : null;
-      const coverId = linkedIn && post.mediaUrl ? await uploadLinkedInCover(linkedIn, post, this.fetch) : '';
+      const coverId = linkedIn && post.destination && post.mediaUrl ? await uploadLinkedInCover(linkedIn, post, this.fetch) : '';
       if (!this.store.workerActive) return;
       const claimed = await this.store.transaction(async () => {
         const [row] = await this.store.query('SELECT payload FROM social_posts WHERE workspace_id=? AND id=?', [workspace, post.id]);

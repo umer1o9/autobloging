@@ -111,14 +111,6 @@ export async function uploadLinkedInCover(account, post, download = fetchWebsite
     throw coverError('The article cover could not be read as an image. Replace the cover URL in the LinkedIn draft.');
   }
 
-  // Personal profiles keep the self-serve UGC API. Pages use the versioned Posts API.
-  const page = post.destination;
-  const owner = page || 'urn:li:person:' + account.memberId;
-  const payload = page ? { initializeUploadRequest: { owner } } : { registerUploadRequest: {
-    owner, recipes: ['urn:li:digitalmediaRecipe:feedshare-image'],
-    serviceRelationships: [{ relationshipType: 'OWNER', identifier: 'urn:li:userGeneratedContent' }],
-    supportedUploadMechanism: ['SYNCHRONOUS_UPLOAD']
-  } };
   const coverRequest = async (url, options) => {
     let response;
     try {
@@ -129,21 +121,18 @@ export async function uploadLinkedInCover(account, post, download = fetchWebsite
     if (!response.ok) throw coverError('LinkedIn could not accept the cover image. Check the post and account permissions.', response.status === 429 || response.status >= 500);
     return response;
   };
-  const registration = await coverRequest(page
-    ? 'https://api.linkedin.com/rest/images?action=initializeUpload'
-    : 'https://api.linkedin.com/v2/assets?action=registerUpload', {
-    method: 'POST', headers: page ? pageHeaders(account.token) : memberHeaders(account.token), body: JSON.stringify(payload)
+  const registration = await coverRequest('https://api.linkedin.com/rest/images?action=initializeUpload', {
+    method: 'POST', headers: pageHeaders(account.token),
+    body: JSON.stringify({ initializeUploadRequest: { owner: post.destination } })
   });
   const value = (await registration.json().catch(() => null))?.value;
-  const coverId = page ? value?.image : value?.asset;
-  const uploadUrl = page ? value?.uploadUrl : value?.uploadMechanism?.['com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest']?.uploadUrl;
-  const target = URL.parse(uploadUrl || '');
-  const urn = page ? /^urn:li:image:[\w-]+$/ : /^urn:li:digitalmediaAsset:[\w-]+$/;
-  if (!urn.test(coverId || '') || !target || !['https://api.linkedin.com', 'https://www.linkedin.com'].includes(target.origin) || target.username || target.password) {
+  const coverId = value?.image;
+  const target = URL.parse(value?.uploadUrl || '');
+  if (!/^urn:li:image:[\w-]+$/.test(coverId || '') || !target || !['https://api.linkedin.com', 'https://www.linkedin.com'].includes(target.origin) || target.username || target.password) {
     throw coverError('LinkedIn returned an invalid cover upload target. Review the post before retrying.');
   }
   await coverRequest(target.href, {
-    method: 'PUT', headers: { Authorization: 'Bearer ' + account.token, 'Content-Type': 'image/jpeg', ...(!page ? { 'media-type-family': 'STILLIMAGE' } : {}) }, body: jpeg
+    method: 'PUT', headers: { Authorization: 'Bearer ' + account.token, 'Content-Type': 'image/jpeg' }, body: jpeg
   });
   return coverId;
 }
@@ -151,22 +140,24 @@ export async function uploadLinkedInCover(account, post, download = fetchWebsite
 export async function publishLinkedIn(account, post, request = fetch) {
   const page = post.destination;
   if (page && (!/^urn:li:organization:\d+$/.test(page) || !account.pageAccess)) throw Object.assign(new Error('Reconnect LinkedIn with approved Page publishing access.'), { setup: true });
+  const article = { source: post.articleUrl, title: post.title };
+  if (post.previewDescription) article.description = post.previewDescription;
+  if (post.coverId) article.thumbnail = post.coverId;
+  const memberArticle = { status: 'READY', originalUrl: post.articleUrl, title: { text: post.title } };
+  if (post.previewDescription) memberArticle.description = { text: post.previewDescription };
   const response = await request(page ? 'https://api.linkedin.com/rest/posts' : 'https://api.linkedin.com/v2/ugcPosts', {
     method: 'POST', redirect: 'error', signal: AbortSignal.timeout(15000),
     headers: page ? pageHeaders(account.token) : memberHeaders(account.token),
     body: JSON.stringify(page ? {
       author: page, commentary: post.text, visibility: 'PUBLIC',
       distribution: { feedDistribution: 'MAIN_FEED', targetEntities: [], thirdPartyDistributionChannels: [] },
-      content: { article: { source: post.articleUrl, title: post.title, ...(post.coverId ? { thumbnail: post.coverId } : {}) } },
+      content: { article },
       lifecycleState: 'PUBLISHED', isReshareDisabledByAuthor: false
     } : {
       author: 'urn:li:person:' + account.memberId,
       lifecycleState: 'PUBLISHED',
       specificContent: { 'com.linkedin.ugc.ShareContent': {
-        shareCommentary: { text: post.text }, shareMediaCategory: post.coverId ? 'IMAGE' : 'ARTICLE',
-        media: [post.coverId
-          ? { status: 'READY', media: post.coverId, title: { text: post.title } }
-          : { status: 'READY', originalUrl: post.articleUrl, title: { text: post.title } }]
+        shareCommentary: { text: post.text }, shareMediaCategory: 'ARTICLE', media: [memberArticle]
       } },
       visibility: { 'com.linkedin.ugc.MemberNetworkVisibility': 'PUBLIC' }
     })
