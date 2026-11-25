@@ -47,7 +47,9 @@ export function createSocialProvider(env = process.env, request = fetch) {
     },
     async publish(siteId, payload, encrypted) {
       if (payload.platforms[0] !== 'facebook') throw new Error('Unsupported automatic destination.');
-      const result = await graph(siteId, encrypted, '/feed', { message: payload.post, link: payload.articleUrl });
+      const result = await graph(siteId, encrypted, '/feed', {
+        message: payload.post, link: payload.articleUrl, published: 'true'
+      });
       if (typeof result.id !== 'string' || !/^\d+(?:_\d+)?$/.test(result.id)) return {};
       return { id: result.id, postIds: [{ platform: 'facebook', status: 'success', id: result.id, postUrl: 'https://www.facebook.com/' + result.id }] };
     }

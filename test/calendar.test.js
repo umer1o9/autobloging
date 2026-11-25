@@ -92,11 +92,13 @@ test('website summary, status labels, escaped titles and counts render in shared
   assert.match(app.innerHTML, /calendar-entry-site/);
 });
 
-test('calendar LinkedIn check marks require confirmed social publication per article', async () => {
+test('calendar social check marks require confirmed publication per article and platform', async () => {
   const records = fixtures();
   records.sites[0].linkedinActive = true;
+  records.sites[0].facebookActive = true;
   records.articles[0].linkedinPublished = true;
   records.articles[1].status = 'published';
+  records.articles[1].facebookPublished = true;
   const { api, app } = await harness({ records });
   api.selectWebsite('');
   const card = id => app.innerHTML.match(new RegExp('data-id="' + id + '"[^]*?</button>'))[0];
@@ -106,6 +108,12 @@ test('calendar LinkedIn check marks require confirmed social publication per art
   assert.doesNotMatch(card('a2'), /calendar-linkedin-check/);
   assert.match(card('a3'), /LinkedIn disconnected · No confirmed post/);
   assert.doesNotMatch(card('j2'), /calendar-linkedin/);
+  assert.match(card('a1'), /Facebook connected · No confirmed post/);
+  assert.doesNotMatch(card('a1'), /calendar-facebook-check/);
+  assert.match(card('a2'), /Facebook connected · Posted to Facebook/);
+  assert.match(card('a2'), /calendar-facebook-check/);
+  assert.match(card('a3'), /Facebook disconnected · No confirmed post/);
+  assert.doesNotMatch(card('j2'), /calendar-facebook/);
 });
 
 test('four-entry limit expands and persisted expansion restores after reload', async () => {

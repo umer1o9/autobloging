@@ -312,18 +312,27 @@ function monthCells(month) {
   const weeks = Math.ceil(((first.getUTCDay() + 6) % 7 + last.getUTCDate()) / 7);
   return Array.from({ length: weeks * 7 }, (_, index) => { const day = new Date(start); day.setUTCDate(start.getUTCDate() + index); return day.toISOString().slice(0, 10); });
 }
+function calendarSocialBadge(platform, label, icon, connected, published) {
+  const status = `${label} ${connected ? 'connected' : 'disconnected'} · ${published ? 'Posted to ' + label : 'No confirmed post'}`;
+  return {
+    status,
+    html: `<span class="calendar-social-badge calendar-${platform}${connected ? ' is-connected' : ''}" title="${status}" aria-hidden="true">${icon}${published ? `<span class="calendar-social-check calendar-${platform}-check">✓</span>` : ''}</span>`,
+  };
+}
 function calendarEntryCard(entry) {
   const isArticle = entry.kind === 'article';
-  const linkedinActive = isArticle && data.sites.find(site => site.id === entry.siteId)?.linkedinActive;
-  const linkedinPublished = isArticle && entry.linkedinPublished;
-  const connection = linkedinActive ? 'LinkedIn connected' : 'LinkedIn disconnected';
-  const linkedinStatus = linkedinPublished ? connection + ' · Posted to LinkedIn' : connection + ' · No confirmed post';
-  const linkedinIcon = isArticle ? `<span class="calendar-linkedin${linkedinActive ? ' is-connected' : ''}" title="${linkedinStatus}" aria-hidden="true">in${linkedinPublished ? '<span class="calendar-linkedin-check">✓</span>' : ''}</span>` : '';
+  const site = data.sites.find(site => site.id === entry.siteId);
+  const socialBadges = isArticle ? [
+    calendarSocialBadge('linkedin', 'LinkedIn', 'in', site?.linkedinActive, entry.linkedinPublished),
+    calendarSocialBadge('facebook', 'Facebook', 'f', site?.facebookActive, entry.facebookPublished),
+  ] : [];
+  const socialStatus = socialBadges.map(badge => '; ' + badge.status).join('');
+  const socialIcons = isArticle ? `<span class="calendar-social-badges">${socialBadges.map(badge => badge.html).join('')}</span>` : '';
 
   return `<button class="calendar-entry status-${e(entry.status)}" data-action="${isArticle ? 'view-article' : 'job'}" data-id="${e(entry.id)}"
-    title="${e(entry.title)}" aria-label="${isArticle ? 'View article' : 'View job details'}: ${e(entry.title)}; ${e(entry.status)}; ${e(siteName(entry.siteId))}${isArticle ? '; ' + linkedinStatus : ''}">
+    title="${e(entry.title)}" aria-label="${isArticle ? 'View article' : 'View job details'}: ${e(entry.title)}; ${e(entry.status)}; ${e(siteName(entry.siteId))}${socialStatus}">
     <span class="calendar-entry-title">${e(entry.title)}</span>
-    <span class="calendar-entry-status-row"><span class="calendar-entry-meta">${e(entry.status)}${isArticle ? '' : ' · ' + e(entry.stage)}</span>${linkedinIcon}</span>
+    <span class="calendar-entry-status-row"><span class="calendar-entry-meta">${e(entry.status)}${isArticle ? '' : ' · ' + e(entry.stage)}</span>${socialIcons}</span>
     ${!selectedSite ? `<span class="calendar-entry-site">${e(siteName(entry.siteId))}</span>` : ''}
     <span class="calendar-entry-action">${isArticle ? 'View article →' : 'View job details →'}</span>
   </button>`;

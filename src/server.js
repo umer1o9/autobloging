@@ -137,11 +137,11 @@ export async function createApp({ database = process.env.DATABASE_URL, origin = 
       }
       if (path === '/health' && method === 'GET') { await store.query('SELECT 1'); return send(res, 200, { status: 'ok' }); }
       const media = path.match(/^\/media\/([a-f0-9-]+\.(png|jpg|jpeg|webp))$/);
-      if (media && method === 'GET') {
+      if (media && ['GET', 'HEAD'].includes(method)) {
         const file = await imageProvider.read(media[1]).catch(() => null);
         if (!file) throw new AppError(404, 'Image not found.');
         res.writeHead(200, { 'content-type': `image/${media[2] === 'jpg' ? 'jpeg' : media[2]}`, 'cache-control': 'public, max-age=31536000, immutable', 'x-content-type-options': 'nosniff' });
-        return res.end(file);
+        return res.end(method === 'HEAD' ? undefined : file);
       }
       if (['/api/auth/register', '/api/auth/login'].includes(path) && method === 'POST') {
         const ip = req.socket.remoteAddress, time = Date.now(), previous = throttle.get(ip);
@@ -194,13 +194,17 @@ export async function createApp({ database = process.env.DATABASE_URL, origin = 
           return send(res, 200, { ok: true }, { 'set-cookie': cookie('') });
         }
         if (path === '/api/dashboard' && method === 'GET') {
-          const [siteRecords, topics, articleRecords, jobRecords, linkedInPublished] = await Promise.all([
+          const [siteRecords, topics, articleRecords, jobRecords, socialPublished] = await Promise.all([
             store.list('site', workspace), store.list('topic', workspace), store.list('article', workspace),
-            store.list('job', workspace), domain.social.publishedLinkedInArticleIds(workspace)
+            store.list('job', workspace), domain.social.publishedArticleIds(workspace)
           ]);
-          const sites = await Promise.all(siteRecords.map(async s => ({ ...domain.safeSite(s), linkedinActive: !!linkedinConnection(s), reservedCents: await domain.reserved(workspace, s.id), knowledge: knowledgeSummary(await store.getKnowledge(workspace, s.id)) })));
+          const sites = await Promise.all(siteRecords.map(async s => ({
+            ...domain.safeSite(s), linkedinActive: !!linkedinConnection(s), facebookActive: domain.social.facebookConnected(s),
+            reservedCents: await domain.reserved(workspace, s.id), knowledge: knowledgeSummary(await store.getKnowledge(workspace, s.id))
+          })));
           const articles = articleRecords.map(({ content, research, ...a }) => ({
-            ...a, title: content.title, slug: content.slug, linkedinPublished: linkedInPublished.has(a.id)
+            ...a, title: content.title, slug: content.slug,
+            linkedinPublished: socialPublished.linkedin.has(a.id), facebookPublished: socialPublished.facebook.has(a.id)
           }));
           return send(res, 200, { user, sites, topics, articles, jobs: jobRecords.map(({ research, candidate, settings, websiteKnowledge, ...j }) => j), provider: { ready: provider.ready, models: provider.models, images: { configured: imageProvider.configured, defaults: imageProvider.defaults, models: imageProvider.models } } });
         }

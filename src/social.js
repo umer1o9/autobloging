@@ -14,7 +14,7 @@ const plain = value => String(value || '').replace(/\s+/g, ' ').trim();
 const clip = (value, limit) => Array.from(value).slice(0, limit).join('');
 const httpsUrl = value => { const url = httpUrl(value); return url?.startsWith('https://') ? url : ''; };
 
-function linkedinCaption(content, articleUrl) {
+function articleSocialCaption(content, articleUrl) {
   const unique = lines => [...new Map(lines.filter(Boolean).map(line => [line.toLowerCase(), line])).values()];
   const questions = unique((content.faqs || []).map(item => plain(item.question))).slice(0, 2)
     .map(question => clip(question, 149).replace(/[.!?…]+$/, '') + '?');
@@ -58,12 +58,18 @@ export class SocialPublishing {
     return platform === 'linkedin' || this.provider.supports(platform);
   }
 
-  async publishedLinkedInArticleIds(workspace) {
+  facebookConnected(site) {
+    return !!this.provider.fingerprint(site.id, this.facebookCredentials(site));
+  }
+
+  async publishedArticleIds(workspace) {
     const rows = await this.store.query(
-      "SELECT DISTINCT article_id AS articleId FROM social_posts WHERE workspace_id=? AND platform='linkedin' AND status='published'",
+      "SELECT DISTINCT article_id AS articleId, platform FROM social_posts WHERE workspace_id=? AND platform IN ('facebook','linkedin') AND status='published'",
       [workspace]
     );
-    return new Set(rows.map(({ articleId }) => articleId));
+    const published = { facebook: new Set(), linkedin: new Set() };
+    for (const { articleId, platform } of rows) published[platform].add(articleId);
+    return published;
   }
 
   async view(workspace, site) {
@@ -75,7 +81,7 @@ export class SocialPublishing {
       path: site.social?.path || '',
       subreddit: site.social?.subreddit || '',
       flairId: site.social?.flairId || ''
-    }, providerConfigured: !!this.provider.fingerprint(site.id, this.facebookCredentials(site)), posts: rows.map(({ payload }) => {
+    }, providerConfigured: this.facebookConnected(site), posts: rows.map(({ payload }) => {
       const { profileFingerprint, ...post } = parse(payload);
       return post;
     }) };
@@ -135,10 +141,12 @@ export class SocialPublishing {
     const articleUrl = new URL(settings.path.replace('{slug}', encodeURIComponent(article.content.slug)), site.url).href;
     const title = plain(article.content.title);
     const summary = plain(article.content.excerpt || article.content.directAnswer);
+    const articleCaption = settings.platforms.some(platform => platform === 'facebook' || platform === 'linkedin')
+      ? articleSocialCaption(article.content, articleUrl) : '';
     const hooks = {
-      facebook: [title, clip(summary, 360), `Read the article: ${articleUrl}`],
+      facebook: [articleCaption],
       instagram: [title, clip(summary, 550), `Full article on ${new URL(site.url).hostname}.`],
-      linkedin: [linkedinCaption(article.content, articleUrl)],
+      linkedin: [articleCaption],
       reddit: [clip(summary, 700), `Source and full article: ${articleUrl}`],
       tiktok: [clip(summary, 140), `Full article on ${new URL(site.url).hostname}.`],
       youtube: [clip(summary, 700), `Read the full article: ${articleUrl}`]

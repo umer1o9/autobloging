@@ -69,7 +69,12 @@ test('social jobs wait for the public blog, publish once per destination, and pr
   for (const platform of destinations.filter(value => value !== 'facebook')) assert.equal(posts[platform].status, 'manual');
   assert.equal(sent.length, 1);
   assert.equal(sent[0].link, 'https://example.com/blog/reviewed-publishing-workflow.html');
-  assert.match(sent[0].message, /reviewed publishing workflow/);
+  assert.equal(sent[0].published, 'true');
+  assert.match(sent[0].message, /^How does a reviewed publishing workflow work\?/);
+  assert.match(sent[0].message, /• What should reviewers check\?/);
+  assert.ok(sent[0].message.includes(sent[0].link));
+  assert.match(sent[0].message, /#PublishingWorkflow\b/);
+  assert.deepEqual(await domain.social.publishedArticleIds(workspace), { facebook: new Set([article.id]), linkedin: new Set() });
   await assert.rejects(domain.social.edit(workspace, site.id, posts.instagram.id, { text: 'Instagram caption', queue: true }), { status: 409 });
   await domain.transition(workspace, article.id, 'unpublish', { revision: article.revision }, 'editor');
   await domain.social.run();

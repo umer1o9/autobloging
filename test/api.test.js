@@ -2,13 +2,19 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { testDatabase } from './mysql-helper.js';
 import { createApp } from '../src/server.js';
+import { createImageProvider } from '../src/image-provider.js';
 import { website, validArticle } from './helpers.js';
 
 test('REST API: auth, tenant isolation, revision workflow, publication, key rotation, and safe errors', async t => {
   const db = await testDatabase(t, false);
-  const app = await createApp({ database: db.url, origin: 'http://localhost', workers: false, provider: { ready: false, models: {} } });
+  const imageProvider = { ...createImageProvider(), read: async name => name === 'a1.jpg' ? Buffer.from('cover') : null };
+  const app = await createApp({ database: db.url, origin: 'http://localhost', workers: false, provider: { ready: false, models: {} }, imageProvider });
   await new Promise(r => app.server.listen(0, '127.0.0.1', r)); t.after(async () => { await app.close(); await db.cleanup(); });
   const origin = `http://127.0.0.1:${app.server.address().port}`;
+  const cover = await fetch(origin + '/media/a1.jpg', { method: 'HEAD' });
+  assert.equal(cover.status, 200);
+  assert.equal(cover.headers.get('content-type'), 'image/jpeg');
+  assert.equal(await cover.text(), '');
   for (const path of ['/automation', '/overview', '/websites', '/topics', '/articles', '/calendar', '/activity', '/delivery-api', '/mcp-connection', '/articles/example-id']) {
     const routed = await fetch(origin + path);
     assert.equal(routed.status, 200);

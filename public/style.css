@@ -49,9 +49,12 @@ fieldset{border:0;padding:0;margin:0;min-width:0}details{margin:18px 0;border:1p
 .meta-setup-help code { overflow-wrap: anywhere; }
 
 .calendar-entry-status-row{display:flex;align-items:center;justify-content:space-between;gap:8px}
-.calendar-linkedin{position:relative;display:inline-grid;place-items:center;flex:none;width:17px;height:17px;border-radius:3px;background:#5d6865;color:#fff;font:bold 12px/1 Arial,sans-serif;margin:3px 3px 0 0}
+.calendar-social-badges{display:inline-flex;gap:7px;padding:3px 3px 0 0}
+.calendar-social-badge{position:relative;display:inline-grid;place-items:center;flex:none;width:17px;height:17px;border-radius:3px;background:#5d6865;color:#fff;font:bold 12px/1 Arial,sans-serif}
 .calendar-linkedin.is-connected{background:#0a66c2}
-.calendar-linkedin-check{position:absolute;right:-5px;bottom:-4px;display:grid;place-items:center;width:12px;height:12px;border:1px solid #fff;border-radius:50%;background:#1e6849;color:#fff;font:bold 8px/1 system-ui,sans-serif}
+.calendar-facebook{font-size:16px}
+.calendar-facebook.is-connected{background:#0866ff}
+.calendar-social-check{position:absolute;right:-5px;bottom:-4px;display:grid;place-items:center;width:12px;height:12px;border:1px solid #fff;border-radius:50%;background:#1e6849;color:#fff;font:bold 8px/1 system-ui,sans-serif}
 
 .linkedin-preview{margin:16px 0}
 .linkedin-preview h3{font-size:14px;margin:0 0 8px}
